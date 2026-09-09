@@ -1,13 +1,49 @@
-# Procesamiento-transacciones-pago
+# TP Final Programación Concurrente 2026
 
-El sistema debe ejecutar en Java una red de Petri que representa un procesador simplificado de transacciones de pago. Las transacciones recorren uno de tres flujos y compiten por los recursos compartidos P7 y P8. El núcleo debe implementarse mediante un monitor concurrente genérico, políticas intercambiables, hilos derivados de los invariantes y una semántica temporal para T2, T3, T5, T7 y T8.
+Implementación en Java de una Red de Petri para un sistema de procesamiento de transacciones de pago, ejecutada mediante un monitor de concurrencia.
 
-Además de funcionar, el proyecto debe demostrar:
+## Requisitos de desarrollo
 
-preservación del marcado y de los invariantes;
-ausencia de problemas relevantes de sincronización;
-finalización ordenada;
-comportamiento de ambas políticas;
-duración total entre 20 y 40 segundos;
-cumplimiento de 200 invariantes por ejecución;
-reproducibilidad mediante logs, pruebas y documentación.
+- JDK 17
+- Maven 3.9+ recomendado
+- IntelliJ IDEA o Visual Studio Code (el proyecto no depende de un IDE específico)
+
+## Compilar y ejecutar tests
+
+```bash
+mvn clean test
+```
+
+## Ejecutar el bootstrap
+
+```bash
+mvn -q -DskipTests package
+java -cp target/classes ar.edu.unc.concurrente.Main
+```
+
+## Convenciones de ramas
+
+- `main`: versión estable.
+- `develop`: integración común del equipo.
+- ramas cortas por tarea, creadas desde `develop`, por ejemplo:
+  - `feature/T2.1.1-petri-net`
+  - `test/T2.1.2-petri-net`
+  - `feature/T2.1.3-monitor`
+
+Todo cambio funcional entra a `develop` mediante Pull Request. `main` recibe únicamente versiones integradas y estables.
+
+## Estructura prevista
+
+```text
+src/main/java/ar/edu/unc/concurrente/
+├── Main.java
+├── petri/
+├── monitor/
+├── policy/
+├── worker/
+├── verification/
+├── logging/
+└── config/
+```
+
+Los paquetes se crearán cuando exista una tarea que realmente los necesite; no se agregan clases vacías solo para completar la estructura.
