@@ -1,4 +1,4 @@
-package ar.edu.unc.concurrente.petri;
+package petri;
 
 import java.util.Arrays;
 
