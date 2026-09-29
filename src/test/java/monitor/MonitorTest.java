@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import petri.PetriNet;
 import policy.Policy;
 import policy.RandomPolicy;
+import policy.PriorityPolicy;
 
 /**
  * [MONITOR TESTS]
@@ -646,5 +647,156 @@ class MonitorTest {
         List<Integer> getLastCandidates() {
             return lastCandidates;
         }
+    }
+
+    /**
+     * [PRIORITY-POLICY-INTEGRATION]
+     *
+     * Verifica que el Monitor respete una PriorityPolicy real
+     * cuando varias transiciones bloqueadas quedan habilitadas
+     * simultáneamente.
+     *
+     * La transición T2 se utiliza como transición prioritaria
+     * exclusivamente dentro de esta red mínima de prueba.
+     */
+    @Test
+    void shouldReactivatePriorityTransitionWhenConflictOccurs()
+    throws InterruptedException {
+
+        /*
+        * [ARRANGE]
+        *
+        *                  T1 -> P2
+        *                 /
+        * P0 --T0--> P1
+        *                 \
+        *                  T2 -> P3
+        *
+        * M0 = [1, 0, 0, 0]
+        *
+        * Después de T0:
+        * - T1 queda habilitada.
+        * - T2 queda habilitada.
+        * - ambas compiten por el único token de P1.
+        */
+        int[][] incidenceMatrix = {
+                {-1,  0,  0},
+                { 1, -1, -1},
+                { 0,  1,  0},
+                { 0,  0,  1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 0, 0, 0}
+                );
+
+        /*
+        * [PRIORITY-CONFIGURATION]
+        *
+        * T2 es la transición prioritaria en esta red de prueba.
+        *
+        * RandomPolicy solamente se utiliza como fallback
+        * si T2 no se encuentra entre los candidatos.
+        */
+        Policy policy =
+                new PriorityPolicy(
+                        2,
+                        new RandomPolicy(2026L)
+                );
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        policy
+                );
+
+        AtomicBoolean transition1Result =
+                new AtomicBoolean(false);
+
+        AtomicBoolean transition2Result =
+                new AtomicBoolean(false);
+
+        Thread transition1Thread =
+                new Thread(() ->
+                        transition1Result.set(
+                                monitor.fireTransition(1)
+                        )
+                );
+
+        Thread transition2Thread =
+                new Thread(() ->
+                        transition2Result.set(
+                                monitor.fireTransition(2)
+                        )
+                );
+
+        transition1Thread.start();
+        transition2Thread.start();
+
+        /*
+        * [WAIT-CONDITION]
+        *
+        * Confirmamos que ambas solicitudes estén realmente
+        * bloqueadas antes de generar el conflicto.
+        */
+        waitUntilThreadIsWaiting(transition1Thread);
+        waitUntilThreadIsWaiting(transition2Thread);
+
+        // [ACT]
+        assertTrue(
+                monitor.fireTransition(0)
+        );
+
+        /*
+        * [ASSERT - PRIORITY]
+        *
+        * PriorityPolicy debe provocar que T2 sea reactivada.
+        */
+        transition2Thread.join(2000);
+
+        assertFalse(
+                transition2Thread.isAlive(),
+                "Priority transition should have resumed"
+        );
+
+        assertTrue(
+                transition2Result.get(),
+                "Priority transition should have fired successfully"
+        );
+
+        /*
+        * T2 consumió el único token de P1.
+        * T1 debe continuar esperando.
+        */
+        assertTrue(
+                transition1Thread.isAlive(),
+                "Non-priority transition should remain waiting"
+        );
+
+        // [ASSERT - MARKING]
+        assertArrayEquals(
+                new int[]{0, 0, 0, 1},
+                petriNet.getCurrentMarking()
+        );
+
+        /*
+        * [TEST-CLEANUP]
+        *
+        * Interrumpimos T1 para no dejar threads activos.
+        */
+        transition1Thread.interrupt();
+        transition1Thread.join(2000);
+
+        assertFalse(
+                transition1Thread.isAlive(),
+                "Waiting thread should terminate after interruption"
+        );
+
+        assertFalse(
+                transition1Result.get(),
+                "Interrupted firing request should return false"
+        );
     }
 }
