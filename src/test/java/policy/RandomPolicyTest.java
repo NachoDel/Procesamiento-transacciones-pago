@@ -180,4 +180,66 @@ class RandomPolicyTest {
                 () -> policy.select(null)
         );
     }
+
+    /**
+     * [DIFFERENT-SEEDS]
+     *
+     * Verifica que dos políticas inicializadas con seeds distintas
+     * puedan producir secuencias pseudoaleatorias diferentes.
+     *
+     * No se compara una única elección porque dos generadores distintos
+     * podrían seleccionar legítimamente la misma transición en una llamada.
+     *
+     * En cambio, se compara una secuencia suficientemente larga de
+     * decisiones sobre el mismo conjunto ordenado de candidatos.
+     */
+    @Test
+    void differentSeedsShouldProduceDifferentSequences() {
+
+        // [ARRANGE]
+        Policy firstPolicy =
+                new RandomPolicy(100L);
+
+        Policy secondPolicy =
+                new RandomPolicy(200L);
+
+        List<Integer> candidates =
+                List.of(1, 4, 6);
+
+        List<Integer> firstSequence =
+                new ArrayList<>();
+
+        List<Integer> secondSequence =
+                new ArrayList<>();
+
+        /*
+        * [ACT]
+        *
+        * Ambas políticas reciben exactamente la misma secuencia
+        * de listas de candidatos.
+        *
+        * La única diferencia entre ellas es la seed.
+        */
+        for (int i = 0; i < 30; i++) {
+
+            firstSequence.add(
+                    firstPolicy
+                            .select(candidates)
+                            .orElseThrow()
+            );
+
+            secondSequence.add(
+                    secondPolicy
+                            .select(candidates)
+                            .orElseThrow()
+            );
+        }
+
+        // [ASSERT]
+        assertNotEquals(
+                firstSequence,
+                secondSequence,
+                "Different seeds should produce different decision sequences"
+        );
+    }
 }
