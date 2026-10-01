@@ -1,0 +1,1 @@
+Cuando una transición temporal deposita una transacción en P9, T9 se sensibiliza como transición inmediata. La semántica del modelo prioriza las transiciones inmediatas sobre las temporales, por lo que T9 debe ejecutarse antes de que otra transición temporal pueda depositar una nueva transacción en P9
