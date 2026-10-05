@@ -2,27 +2,31 @@ package monitor;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Test;
+
+import petri.PetriNet;
+import policy.ConflictGroup;
+import policy.Policy;
+import policy.PriorityPolicy;
+import policy.RandomPolicy;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import org.junit.jupiter.api.Test;
-
-import petri.PetriNet;
-import policy.Policy;
-import policy.RandomPolicy;
-import policy.PriorityPolicy;
 
 /**
  * [MONITOR TESTS]
  *
- * Valida exclusión mutua, disparo atómico y espera/reactivación
- * condicional del Monitor.
+ * Valida exclusión mutua, disparo atómico, espera/reactivación
+ * condicional e integración del Monitor con las políticas
+ * de resolución de conflictos.
  */
 class MonitorTest {
 
@@ -52,7 +56,8 @@ class MonitorTest {
         MonitorInterface monitor =
                 new Monitor(
                         petriNet,
-                        new RandomPolicy(2026L)
+                        new RandomPolicy(2026L),
+                        List.of()
                 );
 
         // [ACT]
@@ -85,7 +90,8 @@ class MonitorTest {
         MonitorInterface monitor =
                 new Monitor(
                         petriNet,
-                        new RandomPolicy(2026L)
+                        new RandomPolicy(2026L),
+                        List.of()
                 );
 
         int threadCount = 10;
@@ -182,7 +188,8 @@ class MonitorTest {
         MonitorInterface monitor =
                 new Monitor(
                         petriNet,
-                        new RandomPolicy(2026L)
+                        new RandomPolicy(2026L),
+                        List.of()
                 );
 
         AtomicBoolean result =
@@ -264,7 +271,8 @@ class MonitorTest {
         MonitorInterface monitor =
                 new Monitor(
                         petriNet,
-                        new RandomPolicy(2026L)
+                        new RandomPolicy(2026L),
+                        List.of()
                 );
 
         AtomicBoolean result =
@@ -326,9 +334,9 @@ class MonitorTest {
     /**
      * [POLICY-INTEGRATION]
      *
-     * Verifica que, cuando varias transiciones bloqueadas quedan
-     * habilitadas simultáneamente, sea la Policy quien determine
-     * cuál de ellas debe ser reactivada.
+     * Verifica que, cuando varias transiciones pertenecientes
+     * al mismo conflicto quedan habilitadas simultáneamente,
+     * sea Policy quien determine cuál debe reactivarse.
      */
     @Test
     void shouldUsePolicyToSelectWhichWaitingTransitionResumes()
@@ -345,16 +353,11 @@ class MonitorTest {
          *
          * M0 = [1, 0, 0, 0]
          *
-         * Inicialmente:
-         * - T0 está habilitada.
-         * - T1 está bloqueada.
-         * - T2 está bloqueada.
-         *
-         * Después de disparar T0:
+         * Después de T0:
          * - T1 queda habilitada.
          * - T2 queda habilitada.
          *
-         * T1 y T2 compiten por el único token de P1.
+         * Ambas compiten por el único token de P1.
          */
         int[][] incidenceMatrix = {
                 {-1,  0,  0},
@@ -372,11 +375,8 @@ class MonitorTest {
         /*
          * [CONTROLLED-POLICY]
          *
-         * Forzamos la elección de T2.
-         *
-         * El objetivo del test no es probar RandomPolicy,
-         * sino verificar que Monitor respete la decisión
-         * recibida desde Policy.
+         * Se fuerza la elección de T2 para comprobar
+         * que el Monitor respeta la decisión de Policy.
          */
         FixedTransitionPolicy policy =
                 new FixedTransitionPolicy(2);
@@ -384,7 +384,12 @@ class MonitorTest {
         MonitorInterface monitor =
                 new Monitor(
                         petriNet,
-                        policy
+                        policy,
+                        List.of(
+                                new ConflictGroup(
+                                        Set.of(1, 2)
+                                )
+                        )
                 );
 
         AtomicBoolean transition1Result =
@@ -410,28 +415,16 @@ class MonitorTest {
         transition1Thread.start();
         transition2Thread.start();
 
-        /*
-         * [ASSERT - BOTH BLOCKED]
-         *
-         * Esperamos hasta confirmar que ambas solicitudes
-         * están suspendidas en sus respectivas Conditions.
-         */
         waitUntilThreadIsWaiting(transition1Thread);
         waitUntilThreadIsWaiting(transition2Thread);
 
-        /*
-         * [ACT]
-         *
-         * T0 produce un token en P1.
-         * Eso habilita simultáneamente a T1 y T2.
-         */
+        // [ACT]
         assertTrue(
                 monitor.fireTransition(0)
         );
 
         /*
-         * La Policy eligió T2, por lo que ese thread
-         * debería ser el que continúe.
+         * La Policy eligió T2.
          */
         transition2Thread.join(2000);
 
@@ -448,30 +441,20 @@ class MonitorTest {
 
         /*
          * T2 consumió el único token de P1.
-         *
-         * Por lo tanto T1 vuelve a quedar deshabilitada
-         * y debe continuar esperando.
+         * T1 debe continuar esperando.
          */
         assertTrue(
                 transition1Thread.isAlive(),
                 "Non-selected transition should still be waiting"
         );
 
-        // [ASSERT - CANDIDATES]
+        // [ASSERT - POLICY CANDIDATES]
         assertEquals(
                 List.of(1, 2),
                 policy.getLastCandidates()
         );
 
-        /*
-         * [ASSERT - MARKING]
-         *
-         * T0: P0 -> P1
-         * T2: P1 -> P3
-         *
-         * Resultado esperado:
-         * P0=0, P1=0, P2=0, P3=1
-         */
+        // [ASSERT - MARKING]
         assertArrayEquals(
                 new int[]{0, 0, 0, 1},
                 petriNet.getCurrentMarking()
@@ -480,11 +463,8 @@ class MonitorTest {
         /*
          * [TEST-CLEANUP]
          *
-         * T1 quedó legítimamente bloqueada porque perdió
-         * el conflicto por el token de P1.
-         *
-         * La interrumpimos para que el test no deje
-         * ningún thread activo.
+         * T1 quedó legítimamente bloqueada.
+         * Se interrumpe para no dejar threads activos.
          */
         transition1Thread.interrupt();
         transition1Thread.join(2000);
@@ -497,6 +477,231 @@ class MonitorTest {
         assertFalse(
                 transition1Result.get(),
                 "Interrupted firing request should return false"
+        );
+    }
+
+    /**
+     * [PRIORITY-POLICY-INTEGRATION]
+     *
+     * Verifica que el Monitor respete una PriorityPolicy real
+     * cuando varias transiciones del mismo conflicto quedan
+     * habilitadas simultáneamente.
+     */
+    @Test
+    void shouldReactivatePriorityTransitionWhenConflictOccurs()
+            throws InterruptedException {
+
+        /*
+         * [ARRANGE]
+         *
+         *                  T1 -> P2
+         *                 /
+         * P0 --T0--> P1
+         *                 \
+         *                  T2 -> P3
+         *
+         * T1 y T2 pertenecen al mismo conflicto.
+         * T2 se configura como transición prioritaria.
+         */
+        int[][] incidenceMatrix = {
+                {-1,  0,  0},
+                { 1, -1, -1},
+                { 0,  1,  0},
+                { 0,  0,  1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 0, 0, 0}
+                );
+
+        Policy policy =
+                new PriorityPolicy(
+                        2,
+                        new RandomPolicy(2026L)
+                );
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        policy,
+                        List.of(
+                                new ConflictGroup(
+                                        Set.of(1, 2)
+                                )
+                        )
+                );
+
+        AtomicBoolean transition1Result =
+                new AtomicBoolean(false);
+
+        AtomicBoolean transition2Result =
+                new AtomicBoolean(false);
+
+        Thread transition1Thread =
+                new Thread(() ->
+                        transition1Result.set(
+                                monitor.fireTransition(1)
+                        )
+                );
+
+        Thread transition2Thread =
+                new Thread(() ->
+                        transition2Result.set(
+                                monitor.fireTransition(2)
+                        )
+                );
+
+        transition1Thread.start();
+        transition2Thread.start();
+
+        waitUntilThreadIsWaiting(transition1Thread);
+        waitUntilThreadIsWaiting(transition2Thread);
+
+        // [ACT]
+        assertTrue(
+                monitor.fireTransition(0)
+        );
+
+        transition2Thread.join(2000);
+
+        // [ASSERT - PRIORITY]
+        assertFalse(
+                transition2Thread.isAlive(),
+                "Priority transition should have resumed"
+        );
+
+        assertTrue(
+                transition2Result.get(),
+                "Priority transition should have fired successfully"
+        );
+
+        /*
+         * La transición no prioritaria perdió el conflicto
+         * y debe seguir esperando.
+         */
+        assertTrue(
+                transition1Thread.isAlive(),
+                "Non-priority transition should remain waiting"
+        );
+
+        // [ASSERT - MARKING]
+        assertArrayEquals(
+                new int[]{0, 0, 0, 1},
+                petriNet.getCurrentMarking()
+        );
+
+        // [TEST-CLEANUP]
+        transition1Thread.interrupt();
+        transition1Thread.join(2000);
+
+        assertFalse(
+                transition1Thread.isAlive(),
+                "Waiting thread should terminate after interruption"
+        );
+
+        assertFalse(
+                transition1Result.get(),
+                "Interrupted firing request should return false"
+        );
+    }
+
+    /**
+     * [POLICY-SCOPE]
+     *
+     * Verifica que Policy no sea utilizada como scheduler global.
+     *
+     * Transiciones independientes que pueden continuar
+     * simultáneamente deben reactivarse sin competir mediante Policy.
+     */
+    @Test
+    void shouldNotUsePolicyForIndependentTransitions()
+            throws InterruptedException {
+
+        /*
+         * [ARRANGE]
+         *
+         * T0 produce un token en P1 y otro en P2.
+         *
+         * P1 --T1-->
+         * P2 --T2-->
+         *
+         * T1 y T2 son independientes:
+         * no pertenecen a ningún ConflictGroup.
+         */
+        int[][] incidenceMatrix = {
+                {-1,  0,  0},
+                { 1, -1,  0},
+                { 1,  0, -1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 0, 0}
+                );
+
+        RecordingPolicy policy =
+                new RecordingPolicy();
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        policy,
+                        List.of()
+                );
+
+        Thread firstThread =
+                new Thread(() ->
+                        monitor.fireTransition(1)
+                );
+
+        Thread secondThread =
+                new Thread(() ->
+                        monitor.fireTransition(2)
+                );
+
+        firstThread.start();
+        secondThread.start();
+
+        waitUntilThreadIsWaiting(firstThread);
+        waitUntilThreadIsWaiting(secondThread);
+
+        // [ACT]
+        assertTrue(
+                monitor.fireTransition(0)
+        );
+
+        firstThread.join(2000);
+        secondThread.join(2000);
+
+        // [ASSERT - THREADS]
+        assertFalse(
+                firstThread.isAlive(),
+                "First independent transition should have resumed"
+        );
+
+        assertFalse(
+                secondThread.isAlive(),
+                "Second independent transition should have resumed"
+        );
+
+        /*
+         * [ASSERT - POLICY]
+         *
+         * Al no existir conflicto estructural,
+         * Policy nunca debe ser consultada.
+         */
+        assertEquals(
+                0,
+                policy.getInvocationCount()
+        );
+
+        // [ASSERT - MARKING]
+        assertArrayEquals(
+                new int[]{0, 0, 0},
+                petriNet.getCurrentMarking()
         );
     }
 
@@ -562,12 +767,6 @@ class MonitorTest {
         @Override
         public boolean fire(int transition) {
 
-            /*
-             * [ENTER-PROBE]
-             *
-             * El contador es atómico para que el propio mecanismo
-             * de medición sea seguro frente a concurrencia.
-             */
             int concurrentCalls =
                     activeCalls.incrementAndGet();
 
@@ -581,7 +780,7 @@ class MonitorTest {
                  * [FORCED-CONTENTION]
                  *
                  * Amplía deliberadamente la ventana de ejecución
-                 * para detectar accesos concurrentes si existieran.
+                 * para detectar accesos concurrentes.
                  */
                 Thread.sleep(20);
 
@@ -605,11 +804,8 @@ class MonitorTest {
     /**
      * [TEST-DOUBLE / FIXED-POLICY]
      *
-     * Policy utilizada exclusivamente para probar la integración
-     * entre Monitor y el mecanismo de selección.
-     *
-     * Permite determinar de forma explícita qué transición
-     * debe seleccionarse durante un conflicto.
+     * Policy determinista utilizada para controlar exactamente
+     * qué transición debe ganar un conflicto.
      */
     private static class FixedTransitionPolicy implements Policy {
 
@@ -624,13 +820,15 @@ class MonitorTest {
         }
 
         @Override
-        public OptionalInt select(List<Integer> candidates) {
+        public OptionalInt select(
+                List<Integer> candidates
+        ) {
 
             /*
              * [CANDIDATE-RECORDING]
              *
-             * Guardamos una copia para verificar posteriormente
-             * qué alternativas entregó realmente el Monitor.
+             * Guardamos una copia para verificar qué alternativas
+             * entregó realmente el Monitor.
              */
             lastCandidates =
                     List.copyOf(candidates);
@@ -650,153 +848,34 @@ class MonitorTest {
     }
 
     /**
-     * [PRIORITY-POLICY-INTEGRATION]
+     * [TEST-DOUBLE / RECORDING-POLICY]
      *
-     * Verifica que el Monitor respete una PriorityPolicy real
-     * cuando varias transiciones bloqueadas quedan habilitadas
-     * simultáneamente.
-     *
-     * La transición T2 se utiliza como transición prioritaria
-     * exclusivamente dentro de esta red mínima de prueba.
+     * Permite verificar cuántas veces el Monitor consulta
+     * realmente a Policy.
      */
-    @Test
-    void shouldReactivatePriorityTransitionWhenConflictOccurs()
-    throws InterruptedException {
+    private static class RecordingPolicy implements Policy {
 
-        /*
-        * [ARRANGE]
-        *
-        *                  T1 -> P2
-        *                 /
-        * P0 --T0--> P1
-        *                 \
-        *                  T2 -> P3
-        *
-        * M0 = [1, 0, 0, 0]
-        *
-        * Después de T0:
-        * - T1 queda habilitada.
-        * - T2 queda habilitada.
-        * - ambas compiten por el único token de P1.
-        */
-        int[][] incidenceMatrix = {
-                {-1,  0,  0},
-                { 1, -1, -1},
-                { 0,  1,  0},
-                { 0,  0,  1}
-        };
+        private final AtomicInteger invocationCount =
+                new AtomicInteger(0);
 
-        PetriNet petriNet =
-                new PetriNet(
-                        incidenceMatrix,
-                        new int[]{1, 0, 0, 0}
-                );
+        @Override
+        public OptionalInt select(
+                List<Integer> candidates
+        ) {
 
-        /*
-        * [PRIORITY-CONFIGURATION]
-        *
-        * T2 es la transición prioritaria en esta red de prueba.
-        *
-        * RandomPolicy solamente se utiliza como fallback
-        * si T2 no se encuentra entre los candidatos.
-        */
-        Policy policy =
-                new PriorityPolicy(
-                        2,
-                        new RandomPolicy(2026L)
-                );
+            invocationCount.incrementAndGet();
 
-        MonitorInterface monitor =
-                new Monitor(
-                        petriNet,
-                        policy
-                );
+            if (candidates.isEmpty()) {
+                return OptionalInt.empty();
+            }
 
-        AtomicBoolean transition1Result =
-                new AtomicBoolean(false);
+            return OptionalInt.of(
+                    candidates.get(0)
+            );
+        }
 
-        AtomicBoolean transition2Result =
-                new AtomicBoolean(false);
-
-        Thread transition1Thread =
-                new Thread(() ->
-                        transition1Result.set(
-                                monitor.fireTransition(1)
-                        )
-                );
-
-        Thread transition2Thread =
-                new Thread(() ->
-                        transition2Result.set(
-                                monitor.fireTransition(2)
-                        )
-                );
-
-        transition1Thread.start();
-        transition2Thread.start();
-
-        /*
-        * [WAIT-CONDITION]
-        *
-        * Confirmamos que ambas solicitudes estén realmente
-        * bloqueadas antes de generar el conflicto.
-        */
-        waitUntilThreadIsWaiting(transition1Thread);
-        waitUntilThreadIsWaiting(transition2Thread);
-
-        // [ACT]
-        assertTrue(
-                monitor.fireTransition(0)
-        );
-
-        /*
-        * [ASSERT - PRIORITY]
-        *
-        * PriorityPolicy debe provocar que T2 sea reactivada.
-        */
-        transition2Thread.join(2000);
-
-        assertFalse(
-                transition2Thread.isAlive(),
-                "Priority transition should have resumed"
-        );
-
-        assertTrue(
-                transition2Result.get(),
-                "Priority transition should have fired successfully"
-        );
-
-        /*
-        * T2 consumió el único token de P1.
-        * T1 debe continuar esperando.
-        */
-        assertTrue(
-                transition1Thread.isAlive(),
-                "Non-priority transition should remain waiting"
-        );
-
-        // [ASSERT - MARKING]
-        assertArrayEquals(
-                new int[]{0, 0, 0, 1},
-                petriNet.getCurrentMarking()
-        );
-
-        /*
-        * [TEST-CLEANUP]
-        *
-        * Interrumpimos T1 para no dejar threads activos.
-        */
-        transition1Thread.interrupt();
-        transition1Thread.join(2000);
-
-        assertFalse(
-                transition1Thread.isAlive(),
-                "Waiting thread should terminate after interruption"
-        );
-
-        assertFalse(
-                transition1Result.get(),
-                "Interrupted firing request should return false"
-        );
+        int getInvocationCount() {
+            return invocationCount.get();
+        }
     }
 }
