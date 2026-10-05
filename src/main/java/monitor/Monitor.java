@@ -3,6 +3,7 @@ package monitor;
 import petri.PetriNet;
 import policy.ConflictGroup;
 import policy.Policy;
+import timing.TransitionSemantics;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -22,12 +23,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * [NETWORK-AGNOSTIC]
  * El Monitor no conoce plazas ni transiciones concretas.
  *
- * No contiene lógica del estilo:
- *
- * if (transition == 4) { ... }
- *
- * La estructura específica de conflictos se recibe mediante
- * objetos ConflictGroup.
+ * La estructura de conflictos y la clasificación temporal
+ * se reciben externamente mediante configuración.
  */
 public final class Monitor implements MonitorInterface {
 
@@ -42,7 +39,7 @@ public final class Monitor implements MonitorInterface {
      * [POLICY]
      *
      * Estrategia utilizada exclusivamente para resolver
-     * conflictos reales entre transiciones alternativas.
+     * conflictos estructurales entre alternativas válidas.
      */
     private final Policy policy;
 
@@ -55,9 +52,19 @@ public final class Monitor implements MonitorInterface {
     private final List<ConflictGroup> conflictGroups;
 
     /**
+     * [TRANSITION-SEMANTICS]
+     *
+     * Clasifica las transiciones como inmediatas o temporales.
+     *
+     * El Monitor no conoce cuáles son T2, T3, etc.;
+     * solamente consulta esta configuración genérica.
+     */
+    private final TransitionSemantics transitionSemantics;
+
+    /**
      * [MUTUAL-EXCLUSION]
      *
-     * Protege toda evaluación y modificación del marcado.
+     * Protege toda consulta y modificación del marcado.
      */
     private final ReentrantLock lock;
 
@@ -75,14 +82,15 @@ public final class Monitor implements MonitorInterface {
      * [WAITING-THREADS]
      *
      * waitingThreads[t] indica cuántos threads se encuentran
-     * esperando por la transición t.
+     * actualmente esperando la transición t.
      */
     private final int[] waitingThreads;
 
     public Monitor(
             PetriNet petriNet,
             Policy policy,
-            List<ConflictGroup> conflictGroups
+            List<ConflictGroup> conflictGroups,
+            TransitionSemantics transitionSemantics
     ) {
 
         this.petriNet =
@@ -102,11 +110,25 @@ public final class Monitor implements MonitorInterface {
                 "Conflict groups cannot be null"
         );
 
+        this.transitionSemantics =
+                Objects.requireNonNull(
+                        transitionSemantics,
+                        "Transition semantics cannot be null"
+                );
+
+        if (transitionSemantics.getTransitionsCount()
+                != petriNet.getTransitionsCount()) {
+
+            throw new IllegalArgumentException(
+                    "Transition semantics must match PetriNet transition count"
+            );
+        }
+
         /*
          * [CONFIGURATION-VALIDATION]
          *
-         * Se validan los grupos respecto de la cantidad real
-         * de transiciones de la Red de Petri.
+         * Se valida que todos los conflictos hagan referencia
+         * a transiciones reales y que no existan grupos solapados.
          */
         validateConflictGroups(
                 conflictGroups,
@@ -149,10 +171,10 @@ public final class Monitor implements MonitorInterface {
      *
      * Solicita el disparo de una transición.
      *
-     * Si la transición no está sensibilizada, el thread queda
-     * suspendido mediante Condition.await(), sin busy waiting.
+     * Si la transición no puede dispararse actualmente,
+     * el thread queda suspendido mediante Condition.await().
      *
-     * @return true si la transición fue disparada;
+     * @return true si la transición finalmente fue disparada;
      *         false si la solicitud fue abortada por interrupción
      */
     @Override
@@ -165,13 +187,13 @@ public final class Monitor implements MonitorInterface {
             /*
              * [RECHECK-CONDITION]
              *
-             * Se utiliza while porque un thread reactivado debe
-             * volver a comprobar la sensibilización.
+             * Se usa while y no if porque un signal solamente
+             * indica que el estado pudo haber cambiado.
              *
-             * signal() significa "algo cambió", no constituye
-             * permiso irrevocable para disparar.
+             * Al despertar, el thread debe comprobar nuevamente
+             * si realmente puede disparar.
              */
-            while (!petriNet.isEnabled(transition)) {
+            while (!canFireNow(transition)) {
 
                 boolean resumed =
                         awaitTransition(transition);
@@ -181,9 +203,10 @@ public final class Monitor implements MonitorInterface {
                     /*
                      * [INTERRUPTION-HANDOFF]
                      *
-                     * Antes de abandonar el Monitor intentamos
-                     * reactivar otros threads que ahora puedan
-                     * continuar.
+                     * El thread abandona su solicitud.
+                     *
+                     * Antes de salir intentamos despertar otros
+                     * threads que puedan continuar.
                      */
                     signalEnabledWaitingTransitions();
 
@@ -194,8 +217,8 @@ public final class Monitor implements MonitorInterface {
             /*
              * [CRITICAL-SECTION]
              *
-             * Sensibilización y disparo se evalúan bajo
-             * el mismo lock.
+             * La verificación anterior y el disparo real
+             * están protegidos por el mismo lock.
              */
             boolean fired =
                     petriNet.fire(transition);
@@ -205,8 +228,7 @@ public final class Monitor implements MonitorInterface {
                 /*
                  * [REACTIVATION]
                  *
-                 * El nuevo marcado puede haber habilitado
-                 * threads que estaban suspendidos.
+                 * El nuevo marcado puede habilitar otros threads.
                  */
                 signalEnabledWaitingTransitions();
             }
@@ -220,12 +242,70 @@ public final class Monitor implements MonitorInterface {
     }
 
     /**
+     * [FIRING-SEMANTICS]
+     *
+     * Una transición puede dispararse ahora si:
+     *
+     * 1. está sensibilizada según PetriNet;
+     * 2. si es temporal, no existe ninguna transición
+     *    inmediata sensibilizada.
+     *
+     * [IMMEDIATE-PRIORITY]
+     *
+     * Las transiciones inmediatas poseen precedencia
+     * sobre las temporales.
+     */
+    private boolean canFireNow(int transition) {
+
+        if (!petriNet.isEnabled(transition)) {
+            return false;
+        }
+
+        /*
+         * Una inmediata sensibilizada puede dispararse
+         * directamente.
+         */
+        if (transitionSemantics.isImmediate(transition)) {
+            return true;
+        }
+
+        /*
+         * Una temporal solamente puede continuar cuando
+         * el marcado no posee ninguna inmediata sensibilizada.
+         */
+        return !hasEnabledImmediateTransition();
+    }
+
+    /**
+     * [IMMEDIATE-DETECTION]
+     *
+     * Busca genéricamente una transición inmediata
+     * sensibilizada en el marcado actual.
+     */
+    private boolean hasEnabledImmediateTransition() {
+
+        for (int transition = 0;
+             transition < petriNet.getTransitionsCount();
+             transition++) {
+
+            if (transitionSemantics.isImmediate(transition)
+                    && petriNet.isEnabled(transition)) {
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * [WAIT-CONDITION]
      *
      * Suspende el thread actual en la Condition asociada
      * a la transición solicitada.
      *
      * Condition.await():
+     *
      * - libera temporalmente el lock;
      * - suspende el thread;
      * - vuelve a adquirir el lock antes de retornar.
@@ -245,8 +325,8 @@ public final class Monitor implements MonitorInterface {
             /*
              * [INTERRUPTION]
              *
-             * Restauramos el estado de interrupción para que
-             * la señal no se pierda al salir del Monitor.
+             * Restauramos el estado de interrupción para
+             * que la señal no se pierda.
              */
             Thread.currentThread().interrupt();
 
@@ -257,8 +337,8 @@ public final class Monitor implements MonitorInterface {
             /*
              * [WAITING-COUNTER]
              *
-             * Al salir de await(), por signal o interrupción,
-             * el thread deja de pertenecer a la cola lógica.
+             * Al abandonar await(), ya sea por signal o por
+             * interrupción, el thread deja la cola lógica.
              */
             waitingThreads[transition]--;
         }
@@ -267,13 +347,12 @@ public final class Monitor implements MonitorInterface {
     /**
      * [WAITING-THREAD-REACTIVATION]
      *
-     * Reactiva los threads que pueden continuar.
+     * Reactiva threads que pueden continuar según:
      *
-     * [POLICY-SCOPE]
-     * Policy interviene solamente cuando dos o más transiciones
-     * habilitadas pertenecen al mismo ConflictGroup.
-     *
-     * Las transiciones independientes no compiten mediante Policy.
+     * - sensibilización;
+     * - semántica inmediata/temporal;
+     * - conflictos estructurales;
+     * - Policy cuando existe un conflicto efectivo.
      */
     private void signalEnabledWaitingTransitions() {
 
@@ -285,8 +364,8 @@ public final class Monitor implements MonitorInterface {
         }
 
         /*
-         * handled[t] indica que la transición t ya fue tratada
-         * como integrante de algún conflicto estructural.
+         * handled[t] indica que la transición t ya fue
+         * procesada como parte de un ConflictGroup.
          */
         boolean[] handled =
                 new boolean[
@@ -316,8 +395,8 @@ public final class Monitor implements MonitorInterface {
             /*
              * [NO-EFFECTIVE-CONFLICT]
              *
-             * Si solamente una transición del grupo está disponible,
-             * no existe una decisión que Policy deba resolver.
+             * Si solamente una alternativa del grupo puede
+             * dispararse ahora, Policy no tiene nada que decidir.
              */
             if (conflictCandidates.size() == 1) {
 
@@ -331,8 +410,8 @@ public final class Monitor implements MonitorInterface {
             /*
              * [POLICY]
              *
-             * Recién cuando existen dos o más alternativas
-             * del mismo conflicto delegamos la decisión.
+             * Policy interviene únicamente cuando existen
+             * múltiples alternativas del mismo conflicto.
              */
             int selectedTransition =
                     selectByPolicy(
@@ -347,9 +426,8 @@ public final class Monitor implements MonitorInterface {
         /*
          * [INDEPENDENT-TRANSITIONS]
          *
-         * Una transición habilitada y con threads esperando
-         * que no pertenece a ningún conflicto puede continuar
-         * sin pasar por Policy.
+         * Una transición válida que no pertenece a un
+         * conflicto puede continuar sin pasar por Policy.
          */
         for (int transition : enabledWaiting) {
 
@@ -362,10 +440,10 @@ public final class Monitor implements MonitorInterface {
     /**
      * [ENABLED-WAITING]
      *
-     * Reúne las transiciones que:
+     * Reúne solamente las transiciones que:
      *
-     * 1. poseen al menos un thread esperando;
-     * 2. están sensibilizadas actualmente.
+     * - poseen al menos un thread esperando;
+     * - pueden dispararse AHORA según canFireNow().
      *
      * El recorrido ascendente mantiene un orden estable.
      */
@@ -379,7 +457,7 @@ public final class Monitor implements MonitorInterface {
              transition++) {
 
             if (waitingThreads[transition] > 0
-                    && petriNet.isEnabled(transition)) {
+                    && canFireNow(transition)) {
 
                 candidates.add(transition);
             }
@@ -406,8 +484,8 @@ public final class Monitor implements MonitorInterface {
         /*
          * [DEFENSIVE-VALIDATION]
          *
-         * Una Policy correcta debe seleccionar una transición
-         * válida cuando existen candidatos.
+         * Una Policy correcta debe producir una transición
+         * válida cuando recibe candidatos.
          */
         if (selected.isEmpty()) {
             throw new IllegalStateException(
@@ -431,10 +509,10 @@ public final class Monitor implements MonitorInterface {
     /**
      * [SIGNAL]
      *
-     * Despierta un único thread de la cola de la transición.
+     * Despierta un único thread de la cola correspondiente.
      *
-     * El thread deberá recuperar el lock y volver a comprobar
-     * la sensibilización antes de disparar.
+     * El thread deberá recuperar el lock y volver a evaluar
+     * canFireNow() antes de disparar.
      */
     private void signalTransition(int transition) {
 
@@ -444,13 +522,10 @@ public final class Monitor implements MonitorInterface {
     /**
      * [CONFIGURATION-VALIDATION]
      *
-     * Comprueba que:
+     * Verifica que:
      *
-     * - todas las transiciones existan en la PetriNet;
-     * - una transición no pertenezca a dos grupos distintos.
-     *
-     * Los grupos solapados harían ambigua la resolución
-     * mediante Policy.
+     * - todas las transiciones de los grupos existan;
+     * - una transición no pertenezca a dos grupos diferentes.
      */
     private static void validateConflictGroups(
             List<ConflictGroup> conflictGroups,

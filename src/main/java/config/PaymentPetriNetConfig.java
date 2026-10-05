@@ -4,6 +4,8 @@ import petri.PetriNet;
 
 import java.util.Set;
 
+import timing.TransitionSemantics;
+
 /**
  * [PAYMENT-PETRI-NET-CONFIGURATION]
  *
@@ -143,5 +145,21 @@ public final class PaymentPetriNetConfig {
                     "Invalid transition index: " + transition
             );
         }
+    }
+
+    /**
+     * [TRANSITION-SEMANTICS]
+     *
+     * Construye la clasificación temporal oficial de la red:
+     *
+     * T2, T3, T5, T7 y T8 -> temporales
+     * resto                  -> inmediatas
+     */
+    public static TransitionSemantics createTransitionSemantics() {
+
+        return TransitionSemantics.fromTimedTransitions(
+                TRANSITIONS_COUNT,
+                TIMED_TRANSITIONS
+        );
     }
 }
