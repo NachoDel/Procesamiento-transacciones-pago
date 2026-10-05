@@ -1,6 +1,7 @@
 package monitor;
 
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -16,6 +17,7 @@ import policy.Policy;
 import policy.PriorityPolicy;
 import policy.RandomPolicy;
 import timing.TransitionSemantics;
+import timing.TransitionTimingConfig;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,7 +67,10 @@ class MonitorTest {
                         List.of(),
                         TransitionSemantics.allImmediate(
                                 petriNet.getTransitionsCount()
-                        )
+                        ),
+                        TransitionTimingConfig.noDelays(
+                               petriNet.getTransitionsCount()
+)
                 );
 
         // [ACT]
@@ -101,6 +106,9 @@ class MonitorTest {
                         new RandomPolicy(2026L),
                         List.of(),
                         TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
                                 petriNet.getTransitionsCount()
                         )
                 );
@@ -196,6 +204,9 @@ class MonitorTest {
                         List.of(),
                         TransitionSemantics.allImmediate(
                                 petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
                         )
                 );
 
@@ -271,6 +282,9 @@ class MonitorTest {
                         new RandomPolicy(2026L),
                         List.of(),
                         TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),      
+                        TransitionTimingConfig.noDelays(
                                 petriNet.getTransitionsCount()
                         )
                 );
@@ -370,6 +384,9 @@ class MonitorTest {
                                 )
                         ),
                         TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
                                 petriNet.getTransitionsCount()
                         )
                 );
@@ -494,6 +511,9 @@ class MonitorTest {
                         ),
                         TransitionSemantics.allImmediate(
                                 petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
                         )
                 );
 
@@ -610,6 +630,9 @@ class MonitorTest {
                         List.of(),
                         TransitionSemantics.allImmediate(
                                 petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
                         )
                 );
 
@@ -705,7 +728,13 @@ class MonitorTest {
                         petriNet,
                         new RandomPolicy(2026L),
                         List.of(),
-                        semantics
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                2,
+                                Map.of(
+                                        1, 20L
+                                )
+                        )
                 );
 
         AtomicBoolean timedResult =
@@ -808,7 +837,14 @@ class MonitorTest {
                         petriNet,
                         new RandomPolicy(2026L),
                         List.of(),
-                        semantics
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                3,
+                                Map.of(
+                                        0, 10L,
+                                        1, 10L
+                                )
+                        )
                 );
 
         /*
@@ -898,6 +934,32 @@ class MonitorTest {
                 Thread.State.WAITING,
                 thread.getState(),
                 "Thread did not enter WAITING state"
+        );
+    }
+
+    /**
+     * [TEST-SYNCHRONIZATION]
+     *
+     * Espera hasta que un thread ingrese en una espera temporal.
+     */
+    private void waitUntilThreadIsTimedWaiting(
+            Thread thread
+    ) throws InterruptedException {
+
+        long timeout =
+                System.currentTimeMillis() + 2000;
+
+        while (thread.getState()
+                != Thread.State.TIMED_WAITING
+                && System.currentTimeMillis() < timeout) {
+
+            Thread.sleep(5);
+        }
+
+        assertEquals(
+                Thread.State.TIMED_WAITING,
+                thread.getState(),
+                "Thread did not enter TIMED_WAITING state"
         );
     }
 
@@ -1038,5 +1100,289 @@ class MonitorTest {
         int getInvocationCount() {
             return invocationCount.get();
         }
+    }
+    /**
+     * [TIMED-DELAY]
+     *
+     * Verifica que una transición temporal no se dispare
+     * antes de cumplir aproximadamente su tiempo configurado.
+     */
+    @Test
+    void timedTransitionShouldRespectConfiguredDelay() {
+
+    // [ARRANGE]
+    PetriNet petriNet =
+            new PetriNet(
+                    new int[][]{
+                            {-1}
+                    },
+                    new int[]{1}
+            );
+
+    TransitionSemantics semantics =
+            TransitionSemantics.fromTimedTransitions(
+                    1,
+                    Set.of(0)
+            );
+
+    MonitorInterface monitor =
+            new Monitor(
+                    petriNet,
+                    new RandomPolicy(2026L),
+                    List.of(),
+                    semantics,
+                    TransitionTimingConfig.fromMillis(
+                            1,
+                            Map.of(
+                                    0, 80L
+                            )
+                    )
+            );
+
+    long startNanos =
+            System.nanoTime();
+
+    // [ACT]
+    assertTrue(
+            monitor.fireTransition(0)
+    );
+
+    long elapsedMillis =
+            TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime()
+                            - startNanos
+            );
+
+    /*
+    * [ASSERT]
+    *
+    * Usamos un margen inferior moderado para evitar
+    * hacer el test dependiente de precisión extrema
+    * del scheduler del sistema operativo.
+    */
+    assertTrue(
+            elapsedMillis >= 60,
+            "Timed transition fired too early: "
+                    + elapsedMillis
+                    + " ms"
+    );
+    }
+
+    /**
+     * [TIMED-WAIT-CONCURRENCY]
+     *
+     * Verifica que una transición temporal esperando su delay
+     * NO mantenga ocupado el lock del Monitor.
+     *
+     * Dos transiciones temporales independientes tienen
+     * tiempos muy diferentes. La corta debe poder terminar
+     * mientras la larga todavía está esperando.
+     */
+    @Test
+    void timedTransitionShouldReleaseMonitorLockWhileWaiting()
+            throws InterruptedException {
+
+        /*
+        * [ARRANGE]
+        *
+        * T0 consume P0.
+        * T1 consume P1.
+        *
+        * Son completamente independientes.
+        *
+        * T0 -> 500 ms
+        * T1 -> 50 ms
+        */
+        int[][] incidenceMatrix = {
+                {-1,  0},
+                { 0, -1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 1}
+                );
+
+        TransitionSemantics semantics =
+                TransitionSemantics.fromTimedTransitions(
+                        2,
+                        Set.of(0, 1)
+                );
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                2,
+                                Map.of(
+                                        0, 500L,
+                                        1, 50L
+                                )
+                        )
+                );
+
+        AtomicBoolean longResult =
+                new AtomicBoolean(false);
+
+        AtomicBoolean shortResult =
+                new AtomicBoolean(false);
+
+        Thread longTimedThread =
+                new Thread(() ->
+                        longResult.set(
+                                monitor.fireTransition(0)
+                        )
+                );
+
+        Thread shortTimedThread =
+                new Thread(() ->
+                        shortResult.set(
+                                monitor.fireTransition(1)
+                        )
+                );
+
+        // [ACT - LONG TIMER]
+        longTimedThread.start();
+
+        waitUntilThreadIsTimedWaiting(
+                longTimedThread
+        );
+
+        /*
+        * Si T0 retuviera el lock durante los 500 ms,
+        * este thread no podría avanzar.
+        */
+        shortTimedThread.start();
+
+        shortTimedThread.join(300);
+
+        // [ASSERT - PARALLEL TEMPORAL WAIT]
+        assertFalse(
+                shortTimedThread.isAlive(),
+                "Short timed transition should finish while long transition is still waiting"
+        );
+
+        assertTrue(
+                shortResult.get()
+        );
+
+        assertTrue(
+                longTimedThread.isAlive(),
+                "Long timed transition should still be waiting"
+        );
+
+        // [TEST-CLEANUP]
+        longTimedThread.join(1000);
+
+        assertFalse(
+                longTimedThread.isAlive()
+        );
+
+        assertTrue(
+                longResult.get()
+        );
+
+        assertArrayEquals(
+                new int[]{0, 0},
+                petriNet.getCurrentMarking()
+        );
+    }
+
+    /**
+     * [TIMED-INTERRUPTION]
+     *
+     * Verifica que una espera temporal pueda cancelarse
+     * limpiamente mediante interrupción.
+     */
+    @Test
+    void timedTransitionShouldStopWhenInterruptedDuringDelay()
+            throws InterruptedException {
+
+        // [ARRANGE]
+        PetriNet petriNet =
+                new PetriNet(
+                        new int[][]{
+                                {-1}
+                        },
+                        new int[]{1}
+                );
+
+        TransitionSemantics semantics =
+                TransitionSemantics.fromTimedTransitions(
+                        1,
+                        Set.of(0)
+                );
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                1,
+                                Map.of(
+                                        0, 1000L
+                                )
+                        )
+                );
+
+        AtomicBoolean result =
+                new AtomicBoolean(true);
+
+        AtomicBoolean interruptedStatus =
+                new AtomicBoolean(false);
+
+        Thread timedThread =
+                new Thread(() -> {
+
+                    result.set(
+                            monitor.fireTransition(0)
+                    );
+
+                    interruptedStatus.set(
+                            Thread.currentThread()
+                                    .isInterrupted()
+                    );
+                });
+
+        timedThread.start();
+
+        waitUntilThreadIsTimedWaiting(
+                timedThread
+        );
+
+        // [ACT]
+        timedThread.interrupt();
+
+        timedThread.join(1000);
+
+        // [ASSERT]
+        assertFalse(
+                timedThread.isAlive(),
+                "Interrupted timed thread should terminate"
+        );
+
+        assertFalse(
+                result.get(),
+                "Interrupted timed firing should return false"
+        );
+
+        assertTrue(
+                interruptedStatus.get(),
+                "Interrupted status should be preserved"
+        );
+
+        /*
+        * La transición no llegó a dispararse.
+        */
+        assertArrayEquals(
+                new int[]{1},
+                petriNet.getCurrentMarking()
+        );
     }
 }
