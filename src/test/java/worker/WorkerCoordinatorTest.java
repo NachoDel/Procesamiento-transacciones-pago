@@ -6,10 +6,10 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -136,12 +136,13 @@ class WorkerCoordinatorTest {
     /**
      * [LIFECYCLE-GUARD]
      *
-     * Un Thread Java no puede iniciarse dos veces.
-     * El Coordinator debe detectar este error explícitamente.
+     * Un conjunto de Threads no puede iniciarse dos veces.
      */
     @Test
-    void shouldRejectSecondStart() {
+    void shouldRejectSecondStart()
+            throws InterruptedException {
 
+        // [ARRANGE]
         CountingMonitor monitor =
                 new CountingMonitor();
 
@@ -158,25 +159,128 @@ class WorkerCoordinatorTest {
 
         coordinator.startAll();
 
+        // [ASSERT]
         assertThrows(
                 IllegalStateException.class,
                 coordinator::startAll
         );
 
+        // [TEST-CLEANUP]
+        coordinator.requestStop();
+        coordinator.interruptAll();
+
+        assertTrue(
+                coordinator.awaitTermination(
+                        2,
+                        TimeUnit.SECONDS
+                ),
+                "Worker should terminate during test cleanup"
+        );
+
+        assertTrue(
+                coordinator.isTerminated()
+        );
+    }
+
+    /**
+     * [HIGH-CONTENTION]
+     *
+     * Verifica que el Coordinator pueda cancelar y hacer join
+     * correctamente de una cantidad elevada de Workers
+     * bloqueados simultáneamente.
+     *
+     * [OBJECTIVE]
+     * El test no evalúa exclusión mutua del Monitor real
+     * —eso ya está cubierto por MonitorTest—.
+     *
+     * Evalúa robustez del lifecycle bajo alta contención.
+     */
+    @Test
+    void shouldTerminateAllWorkersUnderHighContention()
+            throws InterruptedException {
+
+        // [ARRANGE]
+        int workerCount = 32;
+
+        ManyBlockingMonitor monitor =
+                new ManyBlockingMonitor(
+                        workerCount
+                );
+
+        List<WorkerDefinition> definitions =
+                IntStream.range(
+                                0,
+                                workerCount
+                        )
+                        .mapToObj(index ->
+                                new WorkerDefinition(
+                                        "H-stress-" + index,
+                                        List.of(0)
+                                )
+                        )
+                        .toList();
+
+        WorkerCoordinator coordinator =
+                new WorkerCoordinator(
+                        definitions,
+                        monitor
+                );
+
+        // [ACT - START]
+        coordinator.startAll();
+
         /*
-         * [TEST-CLEANUP]
+         * Confirmamos que los 32 Workers llegaron
+         * efectivamente al punto bloqueante.
+         */
+        assertTrue(
+                monitor.awaitAllEntered(
+                        2,
+                        TimeUnit.SECONDS
+                ),
+                "Not every worker entered the blocking monitor"
+        );
+
+        /*
+         * [SHUTDOWN]
+         *
+         * Todos los Workers están simultáneamente bloqueados.
          */
         coordinator.requestStop();
         coordinator.interruptAll();
+
+        boolean terminated =
+                coordinator.awaitTermination(
+                        3,
+                        TimeUnit.SECONDS
+                );
+
+        // [ASSERT]
+        assertTrue(
+                terminated,
+                "All contending workers should terminate after interruption"
+        );
+
+        assertTrue(
+                coordinator.isTerminated(),
+                "No worker threads should remain active"
+        );
     }
 
+    /**
+     * [TEST-SYNCHRONIZATION]
+     *
+     * Espera de forma acotada hasta observar
+     * una cantidad mínima de llamadas.
+     */
     private void waitUntilAtLeast(
             CountingMonitor monitor,
             int expectedCalls
     ) throws InterruptedException {
 
         long timeout =
-                System.currentTimeMillis() + 2000;
+                System.currentTimeMillis()
+                        + 2000;
 
         while (monitor.getCallCount()
                 < expectedCalls
@@ -222,8 +326,8 @@ class WorkerCoordinatorTest {
     /**
      * [TEST-DOUBLE]
      *
-     * Monitor que permanece bloqueado hasta recibir
-     * una interrupción.
+     * Monitor que mantiene un único Worker bloqueado
+     * hasta recibir una interrupción.
      */
     private static class BlockingMonitor
             implements MonitorInterface {
@@ -261,6 +365,63 @@ class WorkerCoordinatorTest {
         ) throws InterruptedException {
 
             return entered.await(
+                    timeout,
+                    unit
+            );
+        }
+    }
+
+    /**
+     * [TEST-DOUBLE / HIGH-CONTENTION]
+     *
+     * Permite bloquear simultáneamente una cantidad conocida
+     * de Workers y comprobar después su cancelación conjunta.
+     */
+    private static class ManyBlockingMonitor
+            implements MonitorInterface {
+
+        private final CountDownLatch allEntered;
+
+        private final CountDownLatch blocker =
+                new CountDownLatch(1);
+
+        ManyBlockingMonitor(
+                int expectedWorkers
+        ) {
+
+            this.allEntered =
+                    new CountDownLatch(
+                            expectedWorkers
+                    );
+        }
+
+        @Override
+        public boolean fireTransition(
+                int transition
+        ) {
+
+            allEntered.countDown();
+
+            try {
+
+                blocker.await();
+
+                return true;
+
+            } catch (InterruptedException exception) {
+
+                Thread.currentThread().interrupt();
+
+                return false;
+            }
+        }
+
+        boolean awaitAllEntered(
+                long timeout,
+                TimeUnit unit
+        ) throws InterruptedException {
+
+            return allEntered.await(
                     timeout,
                     unit
             );
