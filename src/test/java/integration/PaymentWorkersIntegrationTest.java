@@ -7,6 +7,7 @@ import config.PaymentWorkerConfig;
 
 import monitor.Monitor;
 import monitor.MonitorInterface;
+import monitor.PostFireObserver;
 
 import petri.PetriNet;
 
@@ -210,7 +211,8 @@ class PaymentWorkersIntegrationTest {
                         PaymentPetriNetConfig
                                 .createTransitionSemantics(),
                         PaymentTimingConfig
-                                .createBaseline()
+                                .createBaseline(),
+                        PostFireObserver.noop()
                 );
 
         return new CountingMonitor(
