@@ -3,9 +3,11 @@ package worker;
 import monitor.MonitorInterface;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 /**
  * [WORKER-COORDINATOR]
@@ -15,18 +17,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * - construcción;
  * - creación de Threads;
  * - start;
- * - solicitud de parada;
+ * - solicitud de parada global;
+ * - condiciones de parada específicas;
  * - interrupción;
  * - join.
  *
  * [RESPONSIBILITY]
- * No conoce la Red de Petri, las políticas ni las
- * transiciones concretas.
+ *
+ * No conoce:
+ *
+ * - la Red de Petri;
+ * - las políticas;
+ * - transiciones concretas;
+ * - TARGET;
+ * - reglas experimentales.
  */
 public final class WorkerCoordinator {
 
     /**
-     * [STOP-SIGNAL]
+     * [GLOBAL-STOP-SIGNAL]
      *
      * Señal compartida por todos los Workers.
      *
@@ -51,9 +60,43 @@ public final class WorkerCoordinator {
     private final AtomicBoolean started =
             new AtomicBoolean(false);
 
+    /**
+     * [DEFAULT-CONSTRUCTOR]
+     *
+     * Mantiene el comportamiento existente:
+     * todos los Workers dependen únicamente del stop global.
+     */
     public WorkerCoordinator(
             List<WorkerDefinition> definitions,
             MonitorInterface monitor
+    ) {
+
+        this(
+                definitions,
+                monitor,
+                Map.of()
+        );
+    }
+
+    /**
+     * [PER-WORKER-STOP-CONDITIONS]
+     *
+     * Permite agregar condiciones externas específicas
+     * para Workers concretos.
+     *
+     * El Coordinator no interpreta esas condiciones.
+     *
+     * Ejemplo de integración futura:
+     *
+     * H0 -> tracker::isAdmissionClosed
+     *
+     * stop efectivo =
+     * stop global OR stop específico
+     */
+    public WorkerCoordinator(
+            List<WorkerDefinition> definitions,
+            MonitorInterface monitor,
+            Map<String, BooleanSupplier> specificStopConditions
     ) {
 
         Objects.requireNonNull(
@@ -66,7 +109,13 @@ public final class WorkerCoordinator {
                 "Monitor cannot be null"
         );
 
+        Objects.requireNonNull(
+                specificStopConditions,
+                "Specific stop conditions cannot be null"
+        );
+
         if (definitions.isEmpty()) {
+
             throw new IllegalArgumentException(
                     "At least one worker definition is required"
             );
@@ -76,7 +125,8 @@ public final class WorkerCoordinator {
                 WorkerFactory.createWorkers(
                         definitions,
                         monitor,
-                        stopRequested::get
+                        stopRequested::get,
+                        specificStopConditions
                 );
 
         /*
@@ -85,8 +135,7 @@ public final class WorkerCoordinator {
          * El nombre lógico del Worker pasa a ser también
          * el nombre real del Thread.
          *
-         * Esto será útil posteriormente para diagnóstico
-         * y logging.
+         * Es útil para diagnóstico y logging.
          */
         this.threads =
                 workers.stream()
@@ -117,21 +166,21 @@ public final class WorkerCoordinator {
         }
 
         for (Thread thread : threads) {
+
             thread.start();
         }
     }
 
     /**
-     * [GRACEFUL-STOP-REQUEST]
+     * [GLOBAL-GRACEFUL-STOP]
      *
-     * Solicita que los Workers no comiencen nuevos ciclos.
+     * Solicita que todos los Workers dejen de comenzar
+     * nuevos ciclos.
      *
      * IMPORTANTE:
-     * esto no despierta automáticamente un Worker que ya
-     * se encuentre bloqueado dentro del Monitor.
      *
-     * La finalización global definitiva se diseñará
-     * posteriormente junto con el criterio de corrida.
+     * Esto no despierta automáticamente un Worker que ya
+     * se encuentre bloqueado dentro del Monitor.
      */
     public void requestStop() {
 
@@ -143,12 +192,13 @@ public final class WorkerCoordinator {
      *
      * Interrumpe todos los Threads.
      *
-     * El Monitor ya soporta interrupción tanto durante
+     * El Monitor soporta interrupción tanto durante
      * Condition.await() como durante esperas temporales.
      */
     public void interruptAll() {
 
         for (Thread thread : threads) {
+
             thread.interrupt();
         }
     }
@@ -167,6 +217,7 @@ public final class WorkerCoordinator {
     ) throws InterruptedException {
 
         if (timeout < 0) {
+
             throw new IllegalArgumentException(
                     "Timeout cannot be negative"
             );
@@ -178,7 +229,9 @@ public final class WorkerCoordinator {
         );
 
         long timeoutNanos =
-                unit.toNanos(timeout);
+                unit.toNanos(
+                        timeout
+                );
 
         long deadline =
                 System.nanoTime()
@@ -193,15 +246,17 @@ public final class WorkerCoordinator {
                                 - System.nanoTime();
 
                 if (remainingNanos <= 0) {
+
                     return false;
                 }
 
                 long remainingMillis =
                         Math.max(
                                 1L,
-                                TimeUnit.NANOSECONDS.toMillis(
-                                        remainingNanos
-                                )
+                                TimeUnit.NANOSECONDS
+                                        .toMillis(
+                                                remainingNanos
+                                        )
                         );
 
                 thread.join(
@@ -221,6 +276,8 @@ public final class WorkerCoordinator {
     public boolean isTerminated() {
 
         return threads.stream()
-                .noneMatch(Thread::isAlive);
+                .noneMatch(
+                        Thread::isAlive
+                );
     }
 }
