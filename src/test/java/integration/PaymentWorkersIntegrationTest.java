@@ -24,12 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * [PAYMENT-SYSTEM-INTEGRATION]
  *
- * Integra por primera vez todos los componentes principales
- * del sistema real:
+ * Integra:
  *
  * - Red de Petri oficial;
  * - configuración oficial de conflictos;
- * - semántica inmediata/temporal;
+ * - semántica temporal;
  * - tiempos configurados;
  * - RandomPolicy;
  * - Monitor real;
@@ -37,87 +36,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * [SCOPE]
  *
- * Este test es un smoke test de integración.
+ * Estos tests todavía no verifican:
  *
- * Verifica:
- * - que los cinco Workers puedan arrancar;
- * - que el sistema real produzca progreso;
- * - que pueda solicitarse su finalización;
- * - que no queden Threads residuales.
- *
- * NO verifica todavía:
- * - distribución estadística entre los tres caminos;
  * - exactamente 200 T-invariantes;
- * - política priorizada;
- * - duración final de 20-40 segundos;
- * - logging experimental.
+ * - distribución estadística de políticas;
+ * - logging experimental;
+ * - duración final de 20-40 segundos.
  */
 class PaymentWorkersIntegrationTest {
 
     /**
-     * [REAL-WORKERS]
+     * [REAL-WORKERS / SMOKE-TEST]
      *
      * Los cinco Workers oficiales deben poder operar
-     * conjuntamente sobre la Red de Petri real y luego
-     * finalizar limpiamente.
-     *
-     * [IMPORTANT]
-     *
-     * No exigimos que los tres flujos aparezcan dentro
-     * de esta corrida corta.
-     *
-     * Con RandomPolicy y disponibilidad dinámica de P7/P8,
-     * la utilización concreta de cada flujo pertenece al
-     * análisis de ejecuciones completas y no a este smoke test.
+     * conjuntamente sobre la Red de Petri real,
+     * producir progreso y finalizar limpiamente.
      */
     @Test
     void officialWorkersShouldMakeProgressAndTerminate()
             throws InterruptedException {
 
-        // [ARRANGE - OFFICIAL PETRI NET]
+        // [ARRANGE]
         PetriNet petriNet =
                 PaymentPetriNetConfig.createPetriNet();
 
-        /*
-         * [REAL-MONITOR]
-         *
-         * Se construye utilizando exclusivamente
-         * configuraciones oficiales del sistema.
-         */
-        MonitorInterface realMonitor =
-                new Monitor(
-                        petriNet,
-                        new RandomPolicy(2026L),
-                        PaymentConflictConfig
-                                .getConflictGroups(),
-                        PaymentPetriNetConfig
-                                .createTransitionSemantics(),
-                        PaymentTimingConfig
-                                .createBaseline()
-                );
-
-        /*
-         * [TEST-OBSERVABILITY]
-         *
-         * Este decorator permite contar disparos exitosos
-         * sin agregar logging ni modificar el Monitor productivo.
-         */
         CountingMonitor monitor =
-                new CountingMonitor(
-                        realMonitor
+                createCountingMonitor(
+                        petriNet,
+                        2026L
                 );
 
-        /*
-         * [REAL-WORKERS]
-         *
-         * Se utilizan las definiciones oficiales:
-         *
-         * H0 -> T0
-         * H1 -> T1,T2,T3
-         * H2 -> T4,T5
-         * H3 -> T6,T7,T8
-         * H4 -> T9
-         */
         WorkerCoordinator coordinator =
                 new WorkerCoordinator(
                         PaymentWorkerConfig
@@ -127,18 +75,9 @@ class PaymentWorkersIntegrationTest {
 
         try {
 
-            // [ACT - START]
+            // [ACT]
             coordinator.startAll();
 
-            /*
-             * [PROGRESS]
-             *
-             * El objetivo no representa invariantes completos.
-             *
-             * Solamente exigimos que haya una cantidad mínima
-             * de disparos exitosos que demuestre actividad real
-             * de la red concurrente.
-             */
             boolean progress =
                     waitForSuccessfulFirings(
                             monitor,
@@ -147,7 +86,7 @@ class PaymentWorkersIntegrationTest {
                             TimeUnit.SECONDS
                     );
 
-            // [ASSERT - GLOBAL PROGRESS]
+            // [ASSERT - PROGRESS]
             assertTrue(
                     progress,
                     "Official workers did not make enough progress"
@@ -155,27 +94,8 @@ class PaymentWorkersIntegrationTest {
 
         } finally {
 
-            /*
-             * [TEST-CLEANUP]
-             *
-             * Todavía no implementamos el protocolo definitivo
-             * de finalización de una corrida experimental.
-             *
-             * Para este test:
-             *
-             * 1. evitamos nuevos ciclos;
-             * 2. interrumpimos posibles esperas activas;
-             * 3. esperamos la terminación de todos los Threads.
-             */
-            coordinator.requestStop();
-            coordinator.interruptAll();
-
-            assertTrue(
-                    coordinator.awaitTermination(
-                            3,
-                            TimeUnit.SECONDS
-                    ),
-                    "Some worker threads remained active"
+            stopAndJoin(
+                    coordinator
             );
         }
 
@@ -187,10 +107,122 @@ class PaymentWorkersIntegrationTest {
     }
 
     /**
+     * [MULTIPLE-RUNS]
+     *
+     * Verifica que el sistema pueda ejecutarse varias veces
+     * consecutivas dentro de la misma JVM.
+     *
+     * [OBJECTIVE]
+     *
+     * Cada corrida construye:
+     *
+     * - una nueva PetriNet;
+     * - un nuevo Monitor;
+     * - nuevos Workers;
+     * - nuevos Threads.
+     *
+     * De esta forma comprobamos que una ejecución anterior
+     * no deja estado o Threads que afecten a la siguiente.
+     */
+    @Test
+    void shouldSupportMultipleConsecutiveExecutions()
+            throws InterruptedException {
+
+        int runs = 3;
+
+        for (int run = 0;
+             run < runs;
+             run++) {
+
+            // [ARRANGE - FRESH RUN]
+            PetriNet petriNet =
+                    PaymentPetriNetConfig
+                            .createPetriNet();
+
+            CountingMonitor monitor =
+                    createCountingMonitor(
+                            petriNet,
+                            2026L + run
+                    );
+
+            WorkerCoordinator coordinator =
+                    new WorkerCoordinator(
+                            PaymentWorkerConfig
+                                    .getDefinitions(),
+                            monitor
+                    );
+
+            try {
+
+                // [ACT]
+                coordinator.startAll();
+
+                boolean progress =
+                        waitForSuccessfulFirings(
+                                monitor,
+                                15,
+                                4,
+                                TimeUnit.SECONDS
+                        );
+
+                // [ASSERT - RUN PROGRESS]
+                assertTrue(
+                        progress,
+                        "Run "
+                                + run
+                                + " did not make enough progress"
+                );
+
+            } finally {
+
+                stopAndJoin(
+                        coordinator
+                );
+            }
+
+            // [ASSERT - CLEAN RUN END]
+            assertTrue(
+                    coordinator.isTerminated(),
+                    "Run "
+                            + run
+                            + " left active worker threads"
+            );
+        }
+    }
+
+    /**
+     * [REAL-MONITOR-FACTORY]
+     *
+     * Construye el Monitor real del sistema envuelto
+     * exclusivamente con observabilidad de test.
+     */
+    private CountingMonitor createCountingMonitor(
+            PetriNet petriNet,
+            long seed
+    ) {
+
+        MonitorInterface realMonitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(seed),
+                        PaymentConflictConfig
+                                .getConflictGroups(),
+                        PaymentPetriNetConfig
+                                .createTransitionSemantics(),
+                        PaymentTimingConfig
+                                .createBaseline()
+                );
+
+        return new CountingMonitor(
+                realMonitor
+        );
+    }
+
+    /**
      * [TEST-SYNCHRONIZATION]
      *
-     * Espera hasta alcanzar una cantidad mínima de
-     * disparos exitosos o hasta agotar el timeout.
+     * Espera hasta alcanzar una cantidad mínima
+     * de disparos exitosos.
      */
     private boolean waitForSuccessfulFirings(
             CountingMonitor monitor,
@@ -219,18 +251,35 @@ class PaymentWorkersIntegrationTest {
     }
 
     /**
+     * [TEST-CLEANUP]
+     *
+     * Protocolo de cleanup utilizado únicamente
+     * por estos tests de integración.
+     *
+     * Todavía no representa el protocolo definitivo
+     * de finalización de una corrida experimental.
+     */
+    private void stopAndJoin(
+            WorkerCoordinator coordinator
+    ) throws InterruptedException {
+
+        coordinator.requestStop();
+        coordinator.interruptAll();
+
+        assertTrue(
+                coordinator.awaitTermination(
+                        3,
+                        TimeUnit.SECONDS
+                ),
+                "Some worker threads remained active"
+        );
+    }
+
+    /**
      * [TEST-DOUBLE / MONITOR-DECORATOR]
      *
-     * Mantiene el comportamiento completo del Monitor real
-     * y agrega solamente una métrica para este test.
-     *
-     * [RESPONSIBILITY]
-     *
-     * No:
-     * - modifica decisiones de Policy;
-     * - modifica PetriNet;
-     * - altera tiempos;
-     * - introduce logging productivo.
+     * Mantiene todo el comportamiento del Monitor real
+     * y agrega únicamente un contador de disparos exitosos.
      */
     private static class CountingMonitor
             implements MonitorInterface {
