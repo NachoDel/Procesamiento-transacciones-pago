@@ -1,16 +1,5 @@
 package monitor;
 
-import java.util.List;
-import java.util.Map;
-import java.util.OptionalInt;
-import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import org.junit.jupiter.api.Test;
-
 import petri.PetriNet;
 import policy.ConflictGroup;
 import policy.Policy;
@@ -18,6 +7,18 @@ import policy.PriorityPolicy;
 import policy.RandomPolicy;
 import timing.TransitionSemantics;
 import timing.TransitionTimingConfig;
+
+import java.util.List;
+import java.util.Map;
+import java.util.OptionalInt;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,20 +36,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * - interrupción;
  * - alcance de Policy;
  * - PriorityPolicy;
- * - prioridad de inmediatas frente a temporales.
+ * - prioridad de inmediatas frente a temporales;
+ * - tiempos configurados;
+ * - liberación del lock durante espera temporal;
+ * - interrupción durante temporización;
+ * - notificación post-disparo;
+ * - preservación del orden real de disparos.
  */
 class MonitorTest {
 
-    /**
-     * [BASIC-FIRING]
-     *
-     * Verifica que el Monitor delega correctamente un disparo
-     * habilitado hacia la Red de Petri.
-     */
     @Test
     void shouldFireEnabledTransitionThroughMonitor() {
 
-        // [ARRANGE]
         int[][] incidenceMatrix = {
                 {-1},
                 { 1}
@@ -69,15 +68,13 @@ class MonitorTest {
                                 petriNet.getTransitionsCount()
                         ),
                         TransitionTimingConfig.noDelays(
-                               petriNet.getTransitionsCount()
-)
+                                petriNet.getTransitionsCount()
+                        )
                 );
 
-        // [ACT]
         boolean fired =
                 monitor.fireTransition(0);
 
-        // [ASSERT]
         assertTrue(fired);
 
         assertArrayEquals(
@@ -86,17 +83,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [MUTUAL-EXCLUSION]
-     *
-     * Verifica que dos threads no puedan ejecutar
-     * PetriNet.fire() simultáneamente.
-     */
     @Test
     void shouldSerializeConcurrentAccessToPetriNet()
             throws InterruptedException {
 
-        // [ARRANGE]
         ConcurrencyProbePetriNet petriNet =
                 new ConcurrencyProbePetriNet();
 
@@ -150,7 +140,6 @@ class MonitorTest {
             thread.start();
         }
 
-        // [ACT]
         readyLatch.await();
         startLatch.countDown();
 
@@ -162,30 +151,16 @@ class MonitorTest {
                 "Threads did not finish within the expected time"
         );
 
-        // [ASSERT]
         assertFalse(
                 petriNet.wasConcurrentAccessDetected(),
                 "Two threads entered PetriNet.fire() simultaneously"
         );
     }
 
-    /**
-     * [CONDITIONAL-WAIT]
-     *
-     * Verifica que un thread espere cuando su transición
-     * no está sensibilizada y continúe cuando otro disparo
-     * la habilita.
-     */
     @Test
     void shouldBlockAndResumeWhenTransitionBecomesEnabled()
             throws InterruptedException {
 
-        /*
-         *       T0        T1
-         * P0 ------> P1 ------> P0
-         *
-         * M0 = [1, 0]
-         */
         int[][] incidenceMatrix = {
                 {-1,  1},
                 { 1, -1}
@@ -226,19 +201,16 @@ class MonitorTest {
                 waitingThread
         );
 
-        // [ASSERT - BLOCKED]
         assertTrue(
                 waitingThread.isAlive()
         );
 
-        // [ACT]
         assertTrue(
                 monitor.fireTransition(0)
         );
 
         waitingThread.join(2000);
 
-        // [ASSERT]
         assertFalse(
                 waitingThread.isAlive(),
                 "Waiting thread should have resumed"
@@ -254,17 +226,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [INTERRUPTION]
-     *
-     * Verifica que un thread suspendido pueda abandonar
-     * fireTransition() al recibir una interrupción.
-     */
     @Test
     void shouldStopWaitingWhenThreadIsInterrupted()
             throws InterruptedException {
 
-        // [ARRANGE]
         int[][] incidenceMatrix = {
                 {-1,  1},
                 { 1, -1}
@@ -283,7 +248,7 @@ class MonitorTest {
                         List.of(),
                         TransitionSemantics.allImmediate(
                                 petriNet.getTransitionsCount()
-                        ),      
+                        ),
                         TransitionTimingConfig.noDelays(
                                 petriNet.getTransitionsCount()
                         )
@@ -303,7 +268,8 @@ class MonitorTest {
                     );
 
                     interruptedStatus.set(
-                            Thread.currentThread().isInterrupted()
+                            Thread.currentThread()
+                                    .isInterrupted()
                     );
                 });
 
@@ -313,12 +279,10 @@ class MonitorTest {
                 waitingThread
         );
 
-        // [ACT]
         waitingThread.interrupt();
 
         waitingThread.join(2000);
 
-        // [ASSERT]
         assertFalse(
                 waitingThread.isAlive(),
                 "Interrupted thread should have finished"
@@ -340,24 +304,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [POLICY-INTEGRATION]
-     *
-     * Verifica que Policy determine cuál transición debe
-     * reactivarse cuando existen múltiples alternativas
-     * dentro del mismo conflicto estructural.
-     */
     @Test
     void shouldUsePolicyToSelectWhichWaitingTransitionResumes()
             throws InterruptedException {
 
-        /*
-         *                  T1 -> P2
-         *                 /
-         * P0 --T0--> P1
-         *                 \
-         *                  T2 -> P3
-         */
         int[][] incidenceMatrix = {
                 {-1,  0,  0},
                 { 1, -1, -1},
@@ -422,14 +372,12 @@ class MonitorTest {
                 transition2Thread
         );
 
-        // [ACT]
         assertTrue(
                 monitor.fireTransition(0)
         );
 
         transition2Thread.join(2000);
 
-        // [ASSERT - SELECTED]
         assertFalse(
                 transition2Thread.isAlive(),
                 "Transition selected by Policy should have resumed"
@@ -439,10 +387,6 @@ class MonitorTest {
                 transition2Result.get()
         );
 
-        /*
-         * T2 consumió el único token de P1.
-         * T1 pierde el conflicto y sigue esperando.
-         */
         assertTrue(
                 transition1Thread.isAlive(),
                 "Non-selected transition should still be waiting"
@@ -458,7 +402,6 @@ class MonitorTest {
                 petriNet.getCurrentMarking()
         );
 
-        // [TEST-CLEANUP]
         transition1Thread.interrupt();
         transition1Thread.join(2000);
 
@@ -471,12 +414,6 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [PRIORITY-POLICY-INTEGRATION]
-     *
-     * Verifica que PriorityPolicy sea respetada cuando
-     * existe un conflicto real.
-     */
     @Test
     void shouldReactivatePriorityTransitionWhenConflictOccurs()
             throws InterruptedException {
@@ -548,14 +485,12 @@ class MonitorTest {
                 transition2Thread
         );
 
-        // [ACT]
         assertTrue(
                 monitor.fireTransition(0)
         );
 
         transition2Thread.join(2000);
 
-        // [ASSERT - PRIORITY]
         assertFalse(
                 transition2Thread.isAlive(),
                 "Priority transition should have resumed"
@@ -575,7 +510,6 @@ class MonitorTest {
                 petriNet.getCurrentMarking()
         );
 
-        // [TEST-CLEANUP]
         transition1Thread.interrupt();
         transition1Thread.join(2000);
 
@@ -588,26 +522,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [POLICY-SCOPE]
-     *
-     * Verifica que Policy NO sea utilizada como scheduler global.
-     *
-     * Transiciones independientes pueden continuar sin competir
-     * mediante Policy.
-     */
     @Test
     void shouldNotUsePolicyForIndependentTransitions()
             throws InterruptedException {
 
-        /*
-         * T0 produce un token tanto en P1 como en P2.
-         *
-         * P1 --T1-->
-         * P2 --T2-->
-         *
-         * T1 y T2 son independientes.
-         */
         int[][] incidenceMatrix = {
                 {-1,  0,  0},
                 { 1, -1,  0},
@@ -657,7 +575,6 @@ class MonitorTest {
                 secondThread
         );
 
-        // [ACT]
         assertTrue(
                 monitor.fireTransition(0)
         );
@@ -665,7 +582,6 @@ class MonitorTest {
         firstThread.join(2000);
         secondThread.join(2000);
 
-        // [ASSERT]
         assertFalse(
                 firstThread.isAlive()
         );
@@ -685,27 +601,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [IMMEDIATE-PRIORITY]
-     *
-     * Una transición temporal no puede dispararse mientras
-     * exista una transición inmediata sensibilizada.
-     */
     @Test
     void timedTransitionShouldWaitForEnabledImmediateTransition()
             throws InterruptedException {
 
-        /*
-         * [ARRANGE]
-         *
-         * T0 consume P0.
-         * T1 consume P1.
-         *
-         * Inicialmente ambas están sensibilizadas.
-         *
-         * T0 -> inmediata
-         * T1 -> temporal
-         */
         int[][] incidenceMatrix = {
                 {-1,  0},
                 { 0, -1}
@@ -747,17 +646,12 @@ class MonitorTest {
                         )
                 );
 
-        // [ACT - TIMED REQUEST]
         timedThread.start();
 
         waitUntilThreadIsWaiting(
                 timedThread
         );
 
-        /*
-         * T1 está sensibilizada matemáticamente,
-         * pero debe esperar a T0 inmediata.
-         */
         assertTrue(
                 timedThread.isAlive()
         );
@@ -767,14 +661,12 @@ class MonitorTest {
                 petriNet.getCurrentMarking()
         );
 
-        // [ACT - IMMEDIATE]
         assertTrue(
                 monitor.fireTransition(0)
         );
 
         timedThread.join(2000);
 
-        // [ASSERT]
         assertFalse(
                 timedThread.isAlive(),
                 "Timed transition should resume after immediate transition fires"
@@ -790,29 +682,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [IMMEDIATE-DRAIN]
-     *
-     * Verifica que una transición inmediata consuma el token
-     * intermedio antes de permitir un segundo depósito temporal.
-     *
-     * Reproduce genéricamente la propiedad que necesitamos
-     * posteriormente para P9.
-     */
     @Test
     void immediateTransitionShouldPreventTimedBufferAccumulation()
             throws InterruptedException {
 
-        /*
-         * T0 y T1 depositan en P2.
-         * T2 consume P2.
-         *
-         * T0 -> temporal
-         * T1 -> temporal
-         * T2 -> inmediata
-         *
-         * M0 = [1,1,0,0]
-         */
         int[][] incidenceMatrix = {
                 {-1,  0,  0},
                 { 0, -1,  0},
@@ -847,12 +720,6 @@ class MonitorTest {
                         )
                 );
 
-        /*
-         * [FIRST-TIMED-DEPOSIT]
-         *
-         * T2 inmediata todavía no está sensibilizada,
-         * por lo que T0 puede ejecutarse.
-         */
         assertTrue(
                 monitor.fireTransition(0)
         );
@@ -872,30 +739,23 @@ class MonitorTest {
                         )
                 );
 
-        /*
-         * T1 podría dispararse según PetriNet,
-         * pero T2 inmediata está sensibilizada.
-         */
         secondTimedThread.start();
 
         waitUntilThreadIsWaiting(
                 secondTimedThread
         );
 
-        // [ASSERT - BUFFER REMAINS AT ONE]
         assertEquals(
                 1,
                 petriNet.getCurrentMarking()[2]
         );
 
-        // [ACT - IMMEDIATE DRAIN]
         assertTrue(
                 monitor.fireTransition(2)
         );
 
         secondTimedThread.join(2000);
 
-        // [ASSERT]
         assertFalse(
                 secondTimedThread.isAlive(),
                 "Timed transition should resume after immediate drain"
@@ -911,288 +771,62 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [TEST-SYNCHRONIZATION]
-     *
-     * Espera de forma acotada hasta que el thread
-     * ingrese al estado WAITING.
-     */
-    private void waitUntilThreadIsWaiting(
-            Thread thread
-    ) throws InterruptedException {
-
-        long timeout =
-                System.currentTimeMillis() + 2000;
-
-        while (thread.getState() != Thread.State.WAITING
-                && System.currentTimeMillis() < timeout) {
-
-            Thread.sleep(5);
-        }
-
-        assertEquals(
-                Thread.State.WAITING,
-                thread.getState(),
-                "Thread did not enter WAITING state"
-        );
-    }
-
-    /**
-     * [TEST-SYNCHRONIZATION]
-     *
-     * Espera hasta que un thread ingrese en una espera temporal.
-     */
-    private void waitUntilThreadIsTimedWaiting(
-            Thread thread
-    ) throws InterruptedException {
-
-        long timeout =
-                System.currentTimeMillis() + 2000;
-
-        while (thread.getState()
-                != Thread.State.TIMED_WAITING
-                && System.currentTimeMillis() < timeout) {
-
-            Thread.sleep(5);
-        }
-
-        assertEquals(
-                Thread.State.TIMED_WAITING,
-                thread.getState(),
-                "Thread did not enter TIMED_WAITING state"
-        );
-    }
-
-    /**
-     * [TEST-DOUBLE / CONCURRENCY-PROBE]
-     *
-     * PetriNet artificial utilizada para detectar accesos
-     * concurrentes a fire().
-     */
-    private static class ConcurrencyProbePetriNet
-            extends PetriNet {
-
-        private final AtomicInteger activeCalls =
-                new AtomicInteger(0);
-
-        private final AtomicBoolean concurrentAccessDetected =
-                new AtomicBoolean(false);
-
-        ConcurrencyProbePetriNet() {
-
-            super(
-                    new int[][]{{0}},
-                    new int[]{0}
-            );
-        }
-
-        @Override
-        public boolean fire(int transition) {
-
-            int concurrentCalls =
-                    activeCalls.incrementAndGet();
-
-            if (concurrentCalls > 1) {
-                concurrentAccessDetected.set(true);
-            }
-
-            try {
-
-                /*
-                 * [FORCED-CONTENTION]
-                 *
-                 * Amplía deliberadamente la ventana para
-                 * detectar accesos simultáneos.
-                 */
-                Thread.sleep(20);
-
-            } catch (InterruptedException exception) {
-
-                Thread.currentThread().interrupt();
-
-            } finally {
-
-                activeCalls.decrementAndGet();
-            }
-
-            return true;
-        }
-
-        boolean wasConcurrentAccessDetected() {
-            return concurrentAccessDetected.get();
-        }
-    }
-
-    /**
-     * [TEST-DOUBLE / FIXED-POLICY]
-     *
-     * Permite controlar exactamente cuál transición
-     * debe ganar un conflicto.
-     */
-    private static class FixedTransitionPolicy
-            implements Policy {
-
-        private final int selectedTransition;
-
-        private List<Integer> lastCandidates =
-                List.of();
-
-        FixedTransitionPolicy(
-                int selectedTransition
-        ) {
-
-            this.selectedTransition =
-                    selectedTransition;
-        }
-
-        @Override
-        public OptionalInt select(
-                List<Integer> candidates
-        ) {
-
-            lastCandidates =
-                    List.copyOf(candidates);
-
-            if (!candidates.contains(
-                    selectedTransition
-            )) {
-
-                return OptionalInt.empty();
-            }
-
-            return OptionalInt.of(
-                    selectedTransition
-            );
-        }
-
-        List<Integer> getLastCandidates() {
-            return lastCandidates;
-        }
-    }
-
-    /**
-     * [TEST-DOUBLE / RECORDING-POLICY]
-     *
-     * Permite comprobar si Monitor consultó Policy.
-     */
-    private static class RecordingPolicy
-            implements Policy {
-
-        private final AtomicInteger invocationCount =
-                new AtomicInteger(0);
-
-        @Override
-        public OptionalInt select(
-                List<Integer> candidates
-        ) {
-
-            invocationCount.incrementAndGet();
-
-            if (candidates.isEmpty()) {
-                return OptionalInt.empty();
-            }
-
-            return OptionalInt.of(
-                    candidates.get(0)
-            );
-        }
-
-        int getInvocationCount() {
-            return invocationCount.get();
-        }
-    }
-    /**
-     * [TIMED-DELAY]
-     *
-     * Verifica que una transición temporal no se dispare
-     * antes de cumplir aproximadamente su tiempo configurado.
-     */
     @Test
     void timedTransitionShouldRespectConfiguredDelay() {
 
-    // [ARRANGE]
-    PetriNet petriNet =
-            new PetriNet(
-                    new int[][]{
-                            {-1}
-                    },
-                    new int[]{1}
-            );
+        PetriNet petriNet =
+                new PetriNet(
+                        new int[][]{
+                                {-1}
+                        },
+                        new int[]{1}
+                );
 
-    TransitionSemantics semantics =
-            TransitionSemantics.fromTimedTransitions(
-                    1,
-                    Set.of(0)
-            );
+        TransitionSemantics semantics =
+                TransitionSemantics.fromTimedTransitions(
+                        1,
+                        Set.of(0)
+                );
 
-    MonitorInterface monitor =
-            new Monitor(
-                    petriNet,
-                    new RandomPolicy(2026L),
-                    List.of(),
-                    semantics,
-                    TransitionTimingConfig.fromMillis(
-                            1,
-                            Map.of(
-                                    0, 80L
-                            )
-                    )
-            );
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                1,
+                                Map.of(
+                                        0, 80L
+                                )
+                        )
+                );
 
-    long startNanos =
-            System.nanoTime();
+        long startNanos =
+                System.nanoTime();
 
-    // [ACT]
-    assertTrue(
-            monitor.fireTransition(0)
-    );
+        assertTrue(
+                monitor.fireTransition(0)
+        );
 
-    long elapsedMillis =
-            TimeUnit.NANOSECONDS.toMillis(
-                    System.nanoTime()
-                            - startNanos
-            );
+        long elapsedMillis =
+                TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime()
+                                - startNanos
+                );
 
-    /*
-    * [ASSERT]
-    *
-    * Usamos un margen inferior moderado para evitar
-    * hacer el test dependiente de precisión extrema
-    * del scheduler del sistema operativo.
-    */
-    assertTrue(
-            elapsedMillis >= 60,
-            "Timed transition fired too early: "
-                    + elapsedMillis
-                    + " ms"
-    );
+        assertTrue(
+                elapsedMillis >= 60,
+                "Timed transition fired too early: "
+                        + elapsedMillis
+                        + " ms"
+        );
     }
 
-    /**
-     * [TIMED-WAIT-CONCURRENCY]
-     *
-     * Verifica que una transición temporal esperando su delay
-     * NO mantenga ocupado el lock del Monitor.
-     *
-     * Dos transiciones temporales independientes tienen
-     * tiempos muy diferentes. La corta debe poder terminar
-     * mientras la larga todavía está esperando.
-     */
     @Test
     void timedTransitionShouldReleaseMonitorLockWhileWaiting()
             throws InterruptedException {
 
-        /*
-        * [ARRANGE]
-        *
-        * T0 consume P0.
-        * T1 consume P1.
-        *
-        * Son completamente independientes.
-        *
-        * T0 -> 500 ms
-        * T1 -> 50 ms
-        */
         int[][] incidenceMatrix = {
                 {-1,  0},
                 { 0, -1}
@@ -1245,22 +879,16 @@ class MonitorTest {
                         )
                 );
 
-        // [ACT - LONG TIMER]
         longTimedThread.start();
 
         waitUntilThreadIsTimedWaiting(
                 longTimedThread
         );
 
-        /*
-        * Si T0 retuviera el lock durante los 500 ms,
-        * este thread no podría avanzar.
-        */
         shortTimedThread.start();
 
         shortTimedThread.join(300);
 
-        // [ASSERT - PARALLEL TEMPORAL WAIT]
         assertFalse(
                 shortTimedThread.isAlive(),
                 "Short timed transition should finish while long transition is still waiting"
@@ -1275,7 +903,6 @@ class MonitorTest {
                 "Long timed transition should still be waiting"
         );
 
-        // [TEST-CLEANUP]
         longTimedThread.join(1000);
 
         assertFalse(
@@ -1292,17 +919,10 @@ class MonitorTest {
         );
     }
 
-    /**
-     * [TIMED-INTERRUPTION]
-     *
-     * Verifica que una espera temporal pueda cancelarse
-     * limpiamente mediante interrupción.
-     */
     @Test
     void timedTransitionShouldStopWhenInterruptedDuringDelay()
             throws InterruptedException {
 
-        // [ARRANGE]
         PetriNet petriNet =
                 new PetriNet(
                         new int[][]{
@@ -1356,12 +976,10 @@ class MonitorTest {
                 timedThread
         );
 
-        // [ACT]
         timedThread.interrupt();
 
         timedThread.join(1000);
 
-        // [ASSERT]
         assertFalse(
                 timedThread.isAlive(),
                 "Interrupted timed thread should terminate"
@@ -1377,12 +995,547 @@ class MonitorTest {
                 "Interrupted status should be preserved"
         );
 
-        /*
-        * La transición no llegó a dispararse.
-        */
         assertArrayEquals(
                 new int[]{1},
                 petriNet.getCurrentMarking()
         );
+    }
+
+    @Test
+    void shouldNotifyPostFireObserverAfterSuccessfulFiring() {
+
+        int[][] incidenceMatrix = {
+                {-1},
+                { 1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 0}
+                );
+
+        RecordingPostFireObserver observer =
+                new RecordingPostFireObserver();
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
+                        ),
+                        observer
+                );
+
+        assertTrue(
+                monitor.fireTransition(0)
+        );
+
+        assertEquals(
+                1,
+                observer.getInvocationCount()
+        );
+
+        assertEquals(
+                0,
+                observer.getLastTransition()
+        );
+
+        assertArrayEquals(
+                new int[]{0, 1},
+                observer.getLastMarking()
+        );
+    }
+
+    /**
+     * [ABORTED-FIRING / OBSERVER]
+     *
+     * Una solicitud interrumpida que nunca llega a disparar
+     * NO debe producir una notificación post-fire.
+     */
+    @Test
+    void shouldNotNotifyPostFireObserverWhenFiringIsInterrupted()
+            throws InterruptedException {
+
+        int[][] incidenceMatrix = {
+                {-1,  1},
+                { 1, -1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{1, 0}
+                );
+
+        RecordingPostFireObserver observer =
+                new RecordingPostFireObserver();
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
+                        ),
+                        observer
+                );
+
+        AtomicBoolean result =
+                new AtomicBoolean(true);
+
+        Thread waitingThread =
+                new Thread(() ->
+                        result.set(
+                                monitor.fireTransition(1)
+                        )
+                );
+
+        waitingThread.start();
+
+        waitUntilThreadIsWaiting(
+                waitingThread
+        );
+
+        waitingThread.interrupt();
+
+        waitingThread.join(2000);
+
+        assertFalse(
+                waitingThread.isAlive()
+        );
+
+        assertFalse(
+                result.get()
+        );
+
+        assertEquals(
+                0,
+                observer.getInvocationCount(),
+                "Observer must not be notified for an aborted firing"
+        );
+    }
+
+    /**
+     * [POST-FIRE-ORDER]
+     *
+     * El orden recibido por PostFireObserver debe coincidir
+     * exactamente con el orden real de commits de PetriNet.fire().
+     *
+     * Los Threads compiten concurrentemente, pero Monitor
+     * serializa los commits y ejecuta el observer con el mismo lock.
+     */
+    @Test
+    void shouldPreserveRealFiringOrderInPostFireObserver()
+            throws InterruptedException {
+
+        int threadCount = 8;
+
+        RecordingOrderPetriNet petriNet =
+                new RecordingOrderPetriNet(
+                        threadCount
+                );
+
+        RecordingOrderObserver observer =
+                new RecordingOrderObserver();
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        TransitionSemantics.allImmediate(
+                                petriNet.getTransitionsCount()
+                        ),
+                        TransitionTimingConfig.noDelays(
+                                petriNet.getTransitionsCount()
+                        ),
+                        observer
+                );
+
+        CountDownLatch readyLatch =
+                new CountDownLatch(
+                        threadCount
+                );
+
+        CountDownLatch startLatch =
+                new CountDownLatch(1);
+
+        CountDownLatch finishedLatch =
+                new CountDownLatch(
+                        threadCount
+                );
+
+        AtomicInteger successfulFirings =
+                new AtomicInteger(0);
+
+        for (int i = 0;
+             i < threadCount;
+             i++) {
+
+            int transition = i;
+
+            Thread thread =
+                    new Thread(() -> {
+
+                        readyLatch.countDown();
+
+                        try {
+
+                            startLatch.await();
+
+                            if (monitor.fireTransition(
+                                    transition
+                            )) {
+
+                                successfulFirings
+                                        .incrementAndGet();
+                            }
+
+                        } catch (InterruptedException exception) {
+
+                            Thread.currentThread().interrupt();
+
+                        } finally {
+
+                            finishedLatch.countDown();
+                        }
+                    });
+
+            thread.start();
+        }
+
+        readyLatch.await();
+
+        startLatch.countDown();
+
+        assertTrue(
+                finishedLatch.await(
+                        5,
+                        TimeUnit.SECONDS
+                ),
+                "Concurrent firing threads did not finish"
+        );
+
+        assertEquals(
+                threadCount,
+                successfulFirings.get()
+        );
+
+        assertEquals(
+                threadCount,
+                petriNet.getFiringOrder().size()
+        );
+
+        assertEquals(
+                petriNet.getFiringOrder(),
+                observer.getObservedOrder(),
+                "Observer order must match the real PetriNet commit order"
+        );
+    }
+
+    private void waitUntilThreadIsWaiting(
+            Thread thread
+    ) throws InterruptedException {
+
+        long timeout =
+                System.currentTimeMillis()
+                        + 2000;
+
+        while (thread.getState()
+                != Thread.State.WAITING
+                && System.currentTimeMillis()
+                < timeout) {
+
+            Thread.sleep(5);
+        }
+
+        assertEquals(
+                Thread.State.WAITING,
+                thread.getState(),
+                "Thread did not enter WAITING state"
+        );
+    }
+
+    private void waitUntilThreadIsTimedWaiting(
+            Thread thread
+    ) throws InterruptedException {
+
+        long timeout =
+                System.currentTimeMillis()
+                        + 2000;
+
+        while (thread.getState()
+                != Thread.State.TIMED_WAITING
+                && System.currentTimeMillis()
+                < timeout) {
+
+            Thread.sleep(5);
+        }
+
+        assertEquals(
+                Thread.State.TIMED_WAITING,
+                thread.getState(),
+                "Thread did not enter TIMED_WAITING state"
+        );
+    }
+
+    private static class ConcurrencyProbePetriNet
+            extends PetriNet {
+
+        private final AtomicInteger activeCalls =
+                new AtomicInteger(0);
+
+        private final AtomicBoolean concurrentAccessDetected =
+                new AtomicBoolean(false);
+
+        ConcurrencyProbePetriNet() {
+
+            super(
+                    new int[][]{{0}},
+                    new int[]{0}
+            );
+        }
+
+        @Override
+        public boolean fire(int transition) {
+
+            int concurrentCalls =
+                    activeCalls.incrementAndGet();
+
+            if (concurrentCalls > 1) {
+
+                concurrentAccessDetected.set(
+                        true
+                );
+            }
+
+            try {
+
+                Thread.sleep(20);
+
+            } catch (InterruptedException exception) {
+
+                Thread.currentThread().interrupt();
+
+            } finally {
+
+                activeCalls.decrementAndGet();
+            }
+
+            return true;
+        }
+
+        boolean wasConcurrentAccessDetected() {
+
+            return concurrentAccessDetected.get();
+        }
+    }
+
+    private static class FixedTransitionPolicy
+            implements Policy {
+
+        private final int selectedTransition;
+
+        private List<Integer> lastCandidates =
+                List.of();
+
+        FixedTransitionPolicy(
+                int selectedTransition
+        ) {
+
+            this.selectedTransition =
+                    selectedTransition;
+        }
+
+        @Override
+        public OptionalInt select(
+                List<Integer> candidates
+        ) {
+
+            lastCandidates =
+                    List.copyOf(
+                            candidates
+                    );
+
+            if (!candidates.contains(
+                    selectedTransition
+            )) {
+
+                return OptionalInt.empty();
+            }
+
+            return OptionalInt.of(
+                    selectedTransition
+            );
+        }
+
+        List<Integer> getLastCandidates() {
+
+            return lastCandidates;
+        }
+    }
+
+    private static class RecordingPolicy
+            implements Policy {
+
+        private final AtomicInteger invocationCount =
+                new AtomicInteger(0);
+
+        @Override
+        public OptionalInt select(
+                List<Integer> candidates
+        ) {
+
+            invocationCount.incrementAndGet();
+
+            if (candidates.isEmpty()) {
+
+                return OptionalInt.empty();
+            }
+
+            return OptionalInt.of(
+                    candidates.get(0)
+            );
+        }
+
+        int getInvocationCount() {
+
+            return invocationCount.get();
+        }
+    }
+
+    private static class RecordingPostFireObserver
+            implements PostFireObserver {
+
+        private int invocationCount = 0;
+
+        private int lastTransition = -1;
+
+        private int[] lastMarking;
+
+        @Override
+        public void onSuccessfulFire(
+                int transition,
+                int[] marking
+        ) {
+
+            invocationCount++;
+
+            lastTransition =
+                    transition;
+
+            lastMarking =
+                    marking.clone();
+        }
+
+        int getInvocationCount() {
+
+            return invocationCount;
+        }
+
+        int getLastTransition() {
+
+            return lastTransition;
+        }
+
+        int[] getLastMarking() {
+
+            return lastMarking.clone();
+        }
+    }
+
+    /**
+     * [TEST-DOUBLE / ORDERED-PETRI-NET]
+     *
+     * Registra el orden exacto en que PetriNet.fire()
+     * realiza commits.
+     *
+     * Todas las transiciones son siempre habilitadas.
+     */
+    private static class RecordingOrderPetriNet
+            extends PetriNet {
+
+        private final List<Integer> firingOrder =
+                new CopyOnWriteArrayList<>();
+
+        RecordingOrderPetriNet(
+                int transitionsCount
+        ) {
+
+            super(
+                    new int[][]{
+                            new int[transitionsCount]
+                    },
+                    new int[]{0}
+            );
+        }
+
+        @Override
+        public boolean fire(
+                int transition
+        ) {
+
+            boolean fired =
+                    super.fire(
+                            transition
+                    );
+
+            if (fired) {
+
+                firingOrder.add(
+                        transition
+                );
+            }
+
+            return fired;
+        }
+
+        List<Integer> getFiringOrder() {
+
+            return List.copyOf(
+                    firingOrder
+            );
+        }
+    }
+
+    /**
+     * [TEST-DOUBLE / ORDERED-OBSERVER]
+     *
+     * Registra el orden de las notificaciones recibidas
+     * después de cada commit.
+     */
+    private static class RecordingOrderObserver
+            implements PostFireObserver {
+
+        private final List<Integer> observedOrder =
+                new CopyOnWriteArrayList<>();
+
+        @Override
+        public void onSuccessfulFire(
+                int transition,
+                int[] marking
+        ) {
+
+            observedOrder.add(
+                    transition
+            );
+        }
+
+        List<Integer> getObservedOrder() {
+
+            return List.copyOf(
+                    observedOrder
+            );
+        }
     }
 }
