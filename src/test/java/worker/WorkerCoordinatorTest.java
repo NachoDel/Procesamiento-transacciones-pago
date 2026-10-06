@@ -3,35 +3,37 @@ package worker;
 import monitor.MonitorInterface;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * [WORKER-COORDINATOR TESTS]
  *
- * Verifica el lifecycle de los Threads independientemente
- * de la Red de Petri real.
+ * Verifica:
+ *
+ * - lifecycle general;
+ * - stop global;
+ * - interrupción;
+ * - alta contención;
+ * - condiciones específicas por Worker;
+ * - continuidad de otros Workers durante un stop selectivo.
  */
 class WorkerCoordinatorTest {
 
-    /**
-     * [START-AND-STOP]
-     *
-     * Todos los Workers deben iniciar y poder finalizar
-     * después de una solicitud normal de parada.
-     */
     @Test
     void shouldStartAndStopWorkersCleanly()
             throws InterruptedException {
 
-        // [ARRANGE]
         CountingMonitor monitor =
                 new CountingMonitor();
 
@@ -50,7 +52,6 @@ class WorkerCoordinatorTest {
                         monitor
                 );
 
-        // [ACT]
         coordinator.startAll();
 
         waitUntilAtLeast(
@@ -66,7 +67,6 @@ class WorkerCoordinatorTest {
                         TimeUnit.SECONDS
                 );
 
-        // [ASSERT]
         assertTrue(
                 terminated,
                 "Workers should terminate after stop request"
@@ -77,17 +77,10 @@ class WorkerCoordinatorTest {
         );
     }
 
-    /**
-     * [BLOCKED-CANCELLATION]
-     *
-     * Un Worker bloqueado dentro del Monitor debe poder
-     * finalizar mediante interrupción.
-     */
     @Test
     void shouldInterruptBlockedWorkers()
             throws InterruptedException {
 
-        // [ARRANGE]
         BlockingMonitor monitor =
                 new BlockingMonitor();
 
@@ -112,7 +105,6 @@ class WorkerCoordinatorTest {
                 "Worker never entered the blocking monitor"
         );
 
-        // [ACT]
         coordinator.requestStop();
         coordinator.interruptAll();
 
@@ -122,7 +114,6 @@ class WorkerCoordinatorTest {
                         TimeUnit.SECONDS
                 );
 
-        // [ASSERT]
         assertTrue(
                 terminated,
                 "Interrupted worker should terminate"
@@ -133,16 +124,10 @@ class WorkerCoordinatorTest {
         );
     }
 
-    /**
-     * [LIFECYCLE-GUARD]
-     *
-     * Un conjunto de Threads no puede iniciarse dos veces.
-     */
     @Test
     void shouldRejectSecondStart()
             throws InterruptedException {
 
-        // [ARRANGE]
         CountingMonitor monitor =
                 new CountingMonitor();
 
@@ -159,13 +144,11 @@ class WorkerCoordinatorTest {
 
         coordinator.startAll();
 
-        // [ASSERT]
         assertThrows(
                 IllegalStateException.class,
                 coordinator::startAll
         );
 
-        // [TEST-CLEANUP]
         coordinator.requestStop();
         coordinator.interruptAll();
 
@@ -182,24 +165,10 @@ class WorkerCoordinatorTest {
         );
     }
 
-    /**
-     * [HIGH-CONTENTION]
-     *
-     * Verifica que el Coordinator pueda cancelar y hacer join
-     * correctamente de una cantidad elevada de Workers
-     * bloqueados simultáneamente.
-     *
-     * [OBJECTIVE]
-     * El test no evalúa exclusión mutua del Monitor real
-     * —eso ya está cubierto por MonitorTest—.
-     *
-     * Evalúa robustez del lifecycle bajo alta contención.
-     */
     @Test
     void shouldTerminateAllWorkersUnderHighContention()
             throws InterruptedException {
 
-        // [ARRANGE]
         int workerCount = 32;
 
         ManyBlockingMonitor monitor =
@@ -226,13 +195,8 @@ class WorkerCoordinatorTest {
                         monitor
                 );
 
-        // [ACT - START]
         coordinator.startAll();
 
-        /*
-         * Confirmamos que los 32 Workers llegaron
-         * efectivamente al punto bloqueante.
-         */
         assertTrue(
                 monitor.awaitAllEntered(
                         2,
@@ -241,11 +205,6 @@ class WorkerCoordinatorTest {
                 "Not every worker entered the blocking monitor"
         );
 
-        /*
-         * [SHUTDOWN]
-         *
-         * Todos los Workers están simultáneamente bloqueados.
-         */
         coordinator.requestStop();
         coordinator.interruptAll();
 
@@ -255,7 +214,6 @@ class WorkerCoordinatorTest {
                         TimeUnit.SECONDS
                 );
 
-        // [ASSERT]
         assertTrue(
                 terminated,
                 "All contending workers should terminate after interruption"
@@ -264,6 +222,156 @@ class WorkerCoordinatorTest {
         assertTrue(
                 coordinator.isTerminated(),
                 "No worker threads should remain active"
+        );
+    }
+
+    /**
+     * [SELECTIVE-STOP]
+     *
+     * Reproduce genéricamente el contrato acordado
+     * para el cierre de admisión.
+     *
+     * H0:
+     * - ejecuta transición 0;
+     * - cuando alcanza TARGET, una condición externa cambia a true;
+     * - no debe ejecutar una admisión TARGET + 1.
+     *
+     * H1:
+     * - no posee condición específica;
+     * - debe continuar trabajando después del cierre de H0.
+     */
+    @Test
+    void shouldStopOnlyWorkerWhoseSpecificConditionBecomesTrue()
+            throws InterruptedException {
+
+        int target = 25;
+
+        AtomicBoolean admissionClosed =
+                new AtomicBoolean(false);
+
+        AdmissionAwareMonitor monitor =
+                new AdmissionAwareMonitor(
+                        target,
+                        admissionClosed
+                );
+
+        WorkerCoordinator coordinator =
+                new WorkerCoordinator(
+                        List.of(
+                                new WorkerDefinition(
+                                        "H0",
+                                        List.of(0)
+                                ),
+                                new WorkerDefinition(
+                                        "H1",
+                                        List.of(1)
+                                )
+                        ),
+                        monitor,
+                        Map.of(
+                                "H0",
+                                admissionClosed::get
+                        )
+                );
+
+        coordinator.startAll();
+
+        /*
+         * [TARGET-REACHED]
+         *
+         * La condición específica cambia exactamente
+         * durante la llamada que alcanza TARGET.
+         */
+        assertTrue(
+                monitor.awaitAdmissionClosed(
+                        2,
+                        TimeUnit.SECONDS
+                ),
+                "Admission condition was never closed"
+        );
+
+        int processingCountAtClosure =
+                monitor.getProcessingCount();
+
+        /*
+         * [DRAIN-CONTINUITY]
+         *
+         * H1 debe seguir trabajando aunque H0 ya no
+         * pueda comenzar nuevos ciclos.
+         */
+        waitUntilProcessingExceeds(
+                monitor,
+                processingCountAtClosure
+        );
+
+        /*
+         * [EXACT-TARGET]
+         *
+         * La condición específica fue publicada antes
+         * de que H0 pudiera comenzar otro ciclo.
+         */
+        assertEquals(
+                target,
+                monitor.getAdmissionCount(),
+                "H0 must not execute admission TARGET + 1"
+        );
+
+        assertTrue(
+                monitor.getProcessingCount()
+                        > processingCountAtClosure,
+                "H1 should continue after H0 admission closes"
+        );
+
+        /*
+         * [GLOBAL-SHUTDOWN]
+         *
+         * Una vez finalizada la fase selectiva,
+         * el stop global sigue funcionando normalmente.
+         */
+        coordinator.requestStop();
+        coordinator.interruptAll();
+
+        assertTrue(
+                coordinator.awaitTermination(
+                        2,
+                        TimeUnit.SECONDS
+                ),
+                "Workers should terminate after global stop"
+        );
+
+        assertTrue(
+                coordinator.isTerminated()
+        );
+    }
+
+    /**
+     * [INVALID-CONFIGURATION]
+     *
+     * Una condición específica no puede apuntar a
+     * un Worker inexistente.
+     */
+    @Test
+    void shouldRejectSpecificStopConditionForUnknownWorker() {
+
+        CountingMonitor monitor =
+                new CountingMonitor();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new WorkerCoordinator(
+                                List.of(
+                                        new WorkerDefinition(
+                                                "H0",
+                                                List.of(0)
+                                        )
+                                ),
+                                monitor,
+                                Map.of(
+                                        "UNKNOWN",
+                                        () -> false
+                                )
+                        )
         );
     }
 
@@ -298,6 +406,37 @@ class WorkerCoordinatorTest {
     }
 
     /**
+     * [TEST-SYNCHRONIZATION]
+     *
+     * Espera que el Worker que continúa activo realice
+     * al menos una operación adicional después del
+     * cierre del Worker selectivo.
+     */
+    private void waitUntilProcessingExceeds(
+            AdmissionAwareMonitor monitor,
+            int previousCount
+    ) throws InterruptedException {
+
+        long timeout =
+                System.currentTimeMillis()
+                        + 2000;
+
+        while (monitor.getProcessingCount()
+                <= previousCount
+                && System.currentTimeMillis()
+                < timeout) {
+
+            Thread.sleep(5);
+        }
+
+        assertTrue(
+                monitor.getProcessingCount()
+                        > previousCount,
+                "Non-stopped worker did not continue processing"
+        );
+    }
+
+    /**
      * [TEST-DOUBLE]
      *
      * Monitor que acepta inmediatamente cualquier disparo.
@@ -319,6 +458,7 @@ class WorkerCoordinatorTest {
         }
 
         int getCallCount() {
+
             return callCount.get();
         }
     }
@@ -425,6 +565,113 @@ class WorkerCoordinatorTest {
                     timeout,
                     unit
             );
+        }
+    }
+
+    /**
+     * [TEST-DOUBLE / SELECTIVE-STOP]
+     *
+     * Simula el evento que posteriormente producirá
+     * RunProgressTracker dentro de PostFireObserver.
+     *
+     * La transición 0 representa únicamente para este test
+     * al Worker cuya condición debe cerrarse.
+     *
+     * La transición 1 representa otro Worker que debe
+     * continuar activo durante el drenaje.
+     */
+    private static class AdmissionAwareMonitor
+            implements MonitorInterface {
+
+        private final int target;
+
+        private final AtomicBoolean admissionClosed;
+
+        private final AtomicInteger admissionCount =
+                new AtomicInteger(0);
+
+        private final AtomicInteger processingCount =
+                new AtomicInteger(0);
+
+        private final CountDownLatch admissionClosedLatch =
+                new CountDownLatch(1);
+
+        AdmissionAwareMonitor(
+                int target,
+                AtomicBoolean admissionClosed
+        ) {
+
+            this.target =
+                    target;
+
+            this.admissionClosed =
+                    admissionClosed;
+        }
+
+        @Override
+        public boolean fireTransition(
+                int transition
+        ) {
+
+            if (transition == 0) {
+
+                int currentAdmissions =
+                        admissionCount
+                                .incrementAndGet();
+
+                if (currentAdmissions == target) {
+
+                    /*
+                     * [SYNCHRONOUS-CLOSE]
+                     *
+                     * Reproduce la garantía del contrato real:
+                     * la condición cambia antes de que la llamada
+                     * que alcanzó TARGET retorne al Worker.
+                     */
+                    admissionClosed.set(
+                            true
+                    );
+
+                    admissionClosedLatch
+                            .countDown();
+                }
+
+                return true;
+            }
+
+            if (transition == 1) {
+
+                processingCount
+                        .incrementAndGet();
+
+                return true;
+            }
+
+            throw new IllegalArgumentException(
+                    "Unexpected transition in test monitor: "
+                            + transition
+            );
+        }
+
+        boolean awaitAdmissionClosed(
+                long timeout,
+                TimeUnit unit
+        ) throws InterruptedException {
+
+            return admissionClosedLatch.await(
+                    timeout,
+                    unit
+            );
+        }
+
+        int getAdmissionCount() {
+
+            return admissionCount.get();
+        }
+
+        int getProcessingCount() {
+
+            return processingCount.get();
         }
     }
 }
