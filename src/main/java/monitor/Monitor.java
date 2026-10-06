@@ -25,13 +25,19 @@ import java.util.concurrent.locks.ReentrantLock;
  * - espera por sensibilización;
  * - resolución de conflictos;
  * - semántica inmediata/temporal;
- * - espera temporal sin retener la sección crítica.
+ * - espera temporal sin retener la sección crítica;
+ * - acciones posteriores a cada disparo exitoso.
  *
  * [NETWORK-AGNOSTIC]
  * El Monitor no conoce plazas ni transiciones concretas.
  */
 public final class Monitor implements MonitorInterface {
 
+    /**
+     * [SHARED-RESOURCE]
+     *
+     * Red de Petri protegida por el Monitor.
+     */
     private final PetriNet petriNet;
 
     /**
@@ -64,6 +70,14 @@ public final class Monitor implements MonitorInterface {
      * las transiciones temporales.
      */
     private final TransitionTimingConfig transitionTimingConfig;
+
+    /**
+     * [POST-FIRE-OBSERVER]
+     *
+     * Procesa el marcado comprometido inmediatamente
+     * después de cada disparo exitoso.
+     */
+    private final PostFireObserver postFireObserver;
 
     /**
      * [MUTUAL-EXCLUSION]
@@ -100,12 +114,45 @@ public final class Monitor implements MonitorInterface {
      */
     private final int[] waitingThreads;
 
-    public Monitor(
+    /**
+     * [TEST-CONSTRUCTOR]
+     *
+     * Constructor package-private utilizado principalmente
+     * por tests del paquete monitor.
+     *
+     * Utiliza un observer no-op.
+     */
+    Monitor(
             PetriNet petriNet,
             Policy policy,
             List<ConflictGroup> conflictGroups,
             TransitionSemantics transitionSemantics,
             TransitionTimingConfig transitionTimingConfig
+    ) {
+
+        this(
+                petriNet,
+                policy,
+                conflictGroups,
+                transitionSemantics,
+                transitionTimingConfig,
+                PostFireObserver.noop()
+        );
+    }
+
+    /**
+     * [PRODUCTION-CONSTRUCTOR]
+     *
+     * Construye el Monitor con todas sus dependencias,
+     * incluyendo la acción posterior a cada disparo exitoso.
+     */
+    public Monitor(
+            PetriNet petriNet,
+            Policy policy,
+            List<ConflictGroup> conflictGroups,
+            TransitionSemantics transitionSemantics,
+            TransitionTimingConfig transitionTimingConfig,
+            PostFireObserver postFireObserver
     ) {
 
         this.petriNet =
@@ -137,6 +184,12 @@ public final class Monitor implements MonitorInterface {
                         "Transition timing config cannot be null"
                 );
 
+        this.postFireObserver =
+                Objects.requireNonNull(
+                        postFireObserver,
+                        "Post-fire observer cannot be null"
+                );
+
         if (transitionSemantics.getTransitionsCount()
                 != petriNet.getTransitionsCount()) {
 
@@ -163,7 +216,6 @@ public final class Monitor implements MonitorInterface {
                 transitionTimingConfig
         );
 
-        // [DEFENSIVE-COPY]
         this.conflictGroups =
                 List.copyOf(conflictGroups);
 
@@ -259,9 +311,6 @@ public final class Monitor implements MonitorInterface {
                      * Si durante la espera el estado cambió
                      * y la transición dejó de poder dispararse,
                      * volvemos al inicio.
-                     *
-                     * Su tiempo se reiniciará cuando nuevamente
-                     * quede en condiciones de ejecutarse.
                      */
                     if (timingResult
                             == TimingWaitResult.RETRY) {
@@ -289,20 +338,40 @@ public final class Monitor implements MonitorInterface {
                 if (fired) {
 
                     /*
+                     * [COMMITTED-MARKING]
+                     *
+                     * El marcado se obtiene después del disparo
+                     * y mientras el lock continúa tomado.
+                     */
+                    int[] committedMarking =
+                            petriNet.getCurrentMarking();
+
+                    /*
+                     * [POST-FIRE-AUDIT]
+                     *
+                     * Verificación y logging ocurren antes de que
+                     * otro thread pueda realizar un nuevo disparo.
+                     *
+                     * Esto preserva el orden real de commits
+                     * de la Red de Petri.
+                     */
+                    postFireObserver.onSuccessfulFire(
+                            transition,
+                            committedMarking
+                    );
+
+                    /*
                      * [TIMING-REVALIDATION]
                      *
-                     * Cualquier cambio de marcado puede alterar
-                     * las condiciones de los temporizadores activos.
-                     *
-                     * Despertamos a todos para que revaliden.
+                     * Un nuevo marcado puede afectar temporizadores
+                     * que se encuentran actualmente esperando.
                      */
                     timingCondition.signalAll();
 
                     /*
                      * [CONDITIONAL-REACTIVATION]
                      *
-                     * El nuevo marcado puede permitir continuar
-                     * a threads bloqueados.
+                     * El nuevo marcado puede habilitar otros threads.
                      */
                     signalEnabledWaitingTransitions();
                 }
@@ -392,12 +461,8 @@ public final class Monitor implements MonitorInterface {
      *
      * Realiza la demora correspondiente a una transición temporal.
      *
-     * [IMPORTANT]
      * Condition.awaitNanos() libera el ReentrantLock durante
      * la espera y vuelve a adquirirlo antes de retornar.
-     *
-     * Esto permite que otros threads entren al Monitor
-     * durante el tiempo de la transición.
      */
     private TimingWaitResult awaitTimedTransition(
             int transition
@@ -424,12 +489,6 @@ public final class Monitor implements MonitorInterface {
 
             } catch (InterruptedException exception) {
 
-                /*
-                 * [TIMED-INTERRUPTION]
-                 *
-                 * Una interrupción también puede cancelar
-                 * un thread durante una espera temporal.
-                 */
                 Thread.currentThread().interrupt();
 
                 return TimingWaitResult.INTERRUPTED;
@@ -513,7 +572,10 @@ public final class Monitor implements MonitorInterface {
         }
 
         /*
-         * Transiciones independientes.
+         * [INDEPENDENT-TRANSITIONS]
+         *
+         * Transiciones que no pertenecen a un conflicto
+         * pueden continuar sin pasar por Policy.
          */
         for (int transition
                 : enabledWaiting) {
@@ -607,6 +669,11 @@ public final class Monitor implements MonitorInterface {
 
     /**
      * [CONFLICT-CONFIGURATION-VALIDATION]
+     *
+     * Verifica que:
+     *
+     * - todas las transiciones de los grupos existan;
+     * - una transición no pertenezca a dos grupos distintos.
      */
     private static void validateConflictGroups(
             List<ConflictGroup> conflictGroups,
@@ -653,9 +720,6 @@ public final class Monitor implements MonitorInterface {
 
     /**
      * [TIMING-CONFIGURATION-VALIDATION]
-     *
-     * Exige coherencia entre la clasificación temporal
-     * y los tiempos configurados.
      *
      * Temporal  -> debe tener delay positivo.
      * Inmediata -> no debe tener delay.
