@@ -242,4 +242,102 @@ class RandomPolicyTest {
                 "Different seeds should produce different decision sequences"
         );
     }
+
+    /**
+     * [DISTRIBUTION-SANITY]
+     *
+     * Verifica sobre una muestra grande que ninguna de las
+     * alternativas quede sistemáticamente favorecida.
+     *
+     * [IMPORTANT]
+     *
+     * No se exige una proporción exacta de 33,33 %.
+     * El objetivo es detectar sesgos evidentes sin convertir
+     * el test en una prueba estadística frágil.
+     */
+    @Test
+    void shouldProduceReasonablyUniformDistribution() {
+
+    // [ARRANGE]
+    Policy policy =
+            new RandomPolicy(2026L);
+
+    List<Integer> candidates =
+            List.of(1, 4, 6);
+
+    int sampleSize = 30_000;
+
+    int transition1Count = 0;
+    int transition4Count = 0;
+    int transition6Count = 0;
+
+    // [ACT]
+    for (int i = 0; i < sampleSize; i++) {
+
+            int selected =
+                    policy.select(candidates)
+                            .orElseThrow();
+
+            switch (selected) {
+
+            case 1 ->
+                    transition1Count++;
+
+            case 4 ->
+                    transition4Count++;
+
+            case 6 ->
+                    transition6Count++;
+
+            default ->
+                    throw new AssertionError(
+                            "RandomPolicy selected an invalid candidate: "
+                                    + selected
+                    );
+            }
+    }
+
+    /*
+    * [ASSERT / REASONABLE-DISTRIBUTION]
+    *
+    * Para una selección uniforme se espera aproximadamente
+    * un tercio de la muestra por candidato.
+    *
+    * Utilizamos un intervalo deliberadamente amplio
+    * [25 %, 42 %] para evitar fragilidad estadística.
+    */
+    int minimumExpected =
+            (int) (sampleSize * 0.25);
+
+    int maximumExpected =
+            (int) (sampleSize * 0.42);
+
+    assertTrue(
+            transition1Count >= minimumExpected
+                    && transition1Count <= maximumExpected,
+            "T1 count outside reasonable range: "
+                    + transition1Count
+    );
+
+    assertTrue(
+            transition4Count >= minimumExpected
+                    && transition4Count <= maximumExpected,
+            "T4 count outside reasonable range: "
+                    + transition4Count
+    );
+
+    assertTrue(
+            transition6Count >= minimumExpected
+                    && transition6Count <= maximumExpected,
+            "T6 count outside reasonable range: "
+                    + transition6Count
+    );
+
+    assertEquals(
+            sampleSize,
+            transition1Count
+                    + transition4Count
+                    + transition6Count
+    );
+    }
 }

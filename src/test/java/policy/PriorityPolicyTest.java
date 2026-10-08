@@ -214,4 +214,117 @@ class PriorityPolicyTest {
             );
         }
     }
+
+    /**
+     * [SUSTAINED-STRICT-PRIORITY]
+     *
+     * Si la transición prioritaria permanece disponible durante
+     * una carga sostenida, debe ganar todas las decisiones.
+     *
+     * Esto demuestra de forma explícita que la política implementa
+     * prioridad estricta y no una prioridad probabilística.
+     */
+    @Test
+    void shouldKeepSelectingPriorityTransitionUnderSustainedConflict() {
+
+    // [ARRANGE]
+    Policy policy =
+            new PriorityPolicy(
+                    4,
+                    new FixedPolicy(1)
+            );
+
+    List<Integer> candidates =
+            List.of(1, 4, 6);
+
+    int iterations = 10_000;
+
+    // [ACT + ASSERT]
+    for (int i = 0; i < iterations; i++) {
+
+            OptionalInt selected =
+                    policy.select(candidates);
+
+            assertTrue(
+                    selected.isPresent()
+            );
+
+            assertEquals(
+                    4,
+                    selected.getAsInt()
+            );
+    }
+    }
+
+    /**
+     * [STARVATION-DOCUMENTATION]
+     *
+     * Con prioridad estricta, si la transición prioritaria
+     * permanece disponible permanentemente, las restantes
+     * alternativas pueden sufrir starvation.
+     *
+     * El comportamiento es intencional y se documenta
+     * explícitamente en el ADR de fairness.
+     */
+    @Test
+    void shouldDemonstrateStarvationWhenPriorityIsAlwaysAvailable() {
+
+    // [ARRANGE]
+    Policy policy =
+            new PriorityPolicy(
+                    4,
+                    new FixedPolicy(1)
+            );
+
+    List<Integer> candidates =
+            List.of(1, 4, 6);
+
+    int transition1Selections = 0;
+    int transition4Selections = 0;
+    int transition6Selections = 0;
+
+    int iterations = 1_000;
+
+    // [ACT]
+    for (int i = 0; i < iterations; i++) {
+
+            int selected =
+                    policy.select(candidates)
+                            .orElseThrow();
+
+            switch (selected) {
+
+            case 1 ->
+                    transition1Selections++;
+
+            case 4 ->
+                    transition4Selections++;
+
+            case 6 ->
+                    transition6Selections++;
+
+            default ->
+                    throw new AssertionError(
+                            "PriorityPolicy selected an invalid candidate: "
+                                    + selected
+                    );
+            }
+    }
+
+    // [ASSERT]
+    assertEquals(
+            0,
+            transition1Selections
+    );
+
+    assertEquals(
+            iterations,
+            transition4Selections
+    );
+
+    assertEquals(
+            0,
+            transition6Selections
+    );
+    }
 }
