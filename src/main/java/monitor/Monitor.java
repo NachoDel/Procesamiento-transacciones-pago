@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.IntPredicate;
 
 /**
  * [MONITOR]
@@ -80,6 +81,27 @@ public final class Monitor implements MonitorInterface {
     private final PostFireObserver postFireObserver;
 
     /**
+     * [TRANSITION-AVAILABILITY]
+     *
+     * Indica si una transición participa actualmente
+     * de la ejecución.
+     *
+     * Es independiente de la sensibilización de PetriNet:
+     *
+     * PetriNet.isEnabled(t)
+     *      -> el marcado permite dispararla.
+     *
+     * transitionAvailability.test(t)
+     *      -> la fase actual de ejecución permite utilizarla.
+     *
+     * [CONCURRENCY]
+     *
+     * La implementación inyectada debe ser thread-safe
+     * si depende de estado mutable.
+     */
+    private final IntPredicate transitionAvailability;
+
+    /**
      * [MUTUAL-EXCLUSION]
      *
      * Protege el marcado y el estado interno del Monitor.
@@ -136,7 +158,8 @@ public final class Monitor implements MonitorInterface {
                 conflictGroups,
                 transitionSemantics,
                 transitionTimingConfig,
-                PostFireObserver.noop()
+                PostFireObserver.noop(),
+                transition -> true
         );
     }
 
@@ -145,6 +168,8 @@ public final class Monitor implements MonitorInterface {
      *
      * Construye el Monitor con todas sus dependencias,
      * incluyendo la acción posterior a cada disparo exitoso.
+     *
+     * Por defecto todas las transiciones permanecen disponibles.
      */
     public Monitor(
             PetriNet petriNet,
@@ -153,6 +178,39 @@ public final class Monitor implements MonitorInterface {
             TransitionSemantics transitionSemantics,
             TransitionTimingConfig transitionTimingConfig,
             PostFireObserver postFireObserver
+    ) {
+
+        this(
+                petriNet,
+                policy,
+                conflictGroups,
+                transitionSemantics,
+                transitionTimingConfig,
+                postFireObserver,
+                transition -> true
+        );
+    }
+
+    /**
+     * [PRODUCTION-CONSTRUCTOR / DYNAMIC-AVAILABILITY]
+     *
+     * Permite separar:
+     *
+     * - sensibilización estructural de PetriNet;
+     * - disponibilidad de una transición durante
+     *   la fase actual de ejecución.
+     *
+     * Esto permite cerrar dinámicamente una transición
+     * sin hardcodear conocimiento del modelo dentro del Monitor.
+     */
+    public Monitor(
+            PetriNet petriNet,
+            Policy policy,
+            List<ConflictGroup> conflictGroups,
+            TransitionSemantics transitionSemantics,
+            TransitionTimingConfig transitionTimingConfig,
+            PostFireObserver postFireObserver,
+            IntPredicate transitionAvailability
     ) {
 
         this.petriNet =
@@ -188,6 +246,12 @@ public final class Monitor implements MonitorInterface {
                 Objects.requireNonNull(
                         postFireObserver,
                         "Post-fire observer cannot be null"
+                );
+
+        this.transitionAvailability =
+                Objects.requireNonNull(
+                        transitionAvailability,
+                        "Transition availability cannot be null"
                 );
 
         if (transitionSemantics.getTransitionsCount()
@@ -391,7 +455,9 @@ public final class Monitor implements MonitorInterface {
      * Una transición puede dispararse ahora cuando:
      *
      * 1. está sensibilizada en PetriNet;
-     * 2. si es temporal, no existe una inmediata sensibilizada.
+     * 2. está disponible en la fase actual;
+     * 3. si es temporal, no existe una inmediata
+     *    sensibilizada y disponible.
      */
     private boolean canFireNow(int transition) {
 
@@ -399,7 +465,17 @@ public final class Monitor implements MonitorInterface {
             return false;
         }
 
-        if (transitionSemantics.isImmediate(transition)) {
+        if (!transitionAvailability.test(
+                transition
+        )) {
+
+            return false;
+        }
+
+        if (transitionSemantics.isImmediate(
+                transition
+        )) {
+
             return true;
         }
 
@@ -409,8 +485,14 @@ public final class Monitor implements MonitorInterface {
     /**
      * [IMMEDIATE-PRIORITY]
      *
-     * Determina si existe alguna transición inmediata
-     * sensibilizada.
+     * Una inmediata solamente bloquea temporales cuando:
+     *
+     * - está sensibilizada;
+     * - es inmediata;
+     * - continúa disponible en la fase actual.
+     *
+     * Una transición estructuralmente habilitada pero
+     * desactivada por lifecycle no debe impedir el drenaje.
      */
     private boolean hasEnabledImmediateTransition() {
 
@@ -418,8 +500,15 @@ public final class Monitor implements MonitorInterface {
              transition < petriNet.getTransitionsCount();
              transition++) {
 
-            if (transitionSemantics.isImmediate(transition)
-                    && petriNet.isEnabled(transition)) {
+            if (transitionSemantics.isImmediate(
+                    transition
+            )
+                    && petriNet.isEnabled(
+                            transition
+                    )
+                    && transitionAvailability.test(
+                            transition
+                    )) {
 
                 return true;
             }
