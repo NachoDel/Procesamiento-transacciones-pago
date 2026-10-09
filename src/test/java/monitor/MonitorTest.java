@@ -1243,6 +1243,155 @@ class MonitorTest {
         );
     }
 
+    /**
+     * [DYNAMIC-AVAILABILITY / DRAIN]
+     *
+     * Una transición inmediata puede continuar sensibilizada
+     * estructuralmente en PetriNet pero dejar de participar
+     * de la ejecución por una decisión de lifecycle.
+     *
+     * En ese caso no debe bloquear indefinidamente
+     * una transición temporal pendiente.
+     */
+    @Test
+    void inactiveImmediateTransitionShouldNotBlockTimedTransition()
+            throws InterruptedException {
+
+        /*
+         * T0 consume una unidad de P0.
+         *
+         * P0 comienza en 2, por lo que después del primer
+         * disparo T0 continúa estructuralmente sensibilizada.
+         *
+         * T1 consume P1 y es temporal.
+         */
+        int[][] incidenceMatrix = {
+                {-1,  0},
+                { 0, -1}
+        };
+
+        PetriNet petriNet =
+                new PetriNet(
+                        incidenceMatrix,
+                        new int[]{2, 1}
+                );
+
+        TransitionSemantics semantics =
+                TransitionSemantics.fromTimedTransitions(
+                        2,
+                        Set.of(1)
+                );
+
+        AtomicBoolean immediateAvailable =
+                new AtomicBoolean(true);
+
+        PostFireObserver observer =
+                (transition, marking) -> {
+
+                    /*
+                     * [PHASE-CHANGE]
+                     *
+                     * Después de ejecutar T0 una vez,
+                     * simulamos el cierre de admisión.
+                     *
+                     * T0 seguirá sensibilizada porque P0
+                     * todavía contiene un token.
+                     */
+                    if (transition == 0) {
+
+                        immediateAvailable.set(
+                                false
+                        );
+                    }
+                };
+
+        MonitorInterface monitor =
+                new Monitor(
+                        petriNet,
+                        new RandomPolicy(2026L),
+                        List.of(),
+                        semantics,
+                        TransitionTimingConfig.fromMillis(
+                                2,
+                                Map.of(
+                                        1, 20L
+                                )
+                        ),
+                        observer,
+                        transition ->
+                                transition != 0
+                                        || immediateAvailable.get()
+                );
+
+        AtomicBoolean timedResult =
+                new AtomicBoolean(false);
+
+        Thread timedThread =
+                new Thread(() ->
+                        timedResult.set(
+                                monitor.fireTransition(1)
+                        )
+                );
+
+        /*
+         * [ARRANGE]
+         *
+         * T1 comienza primero.
+         *
+         * Como T0 está habilitada y disponible,
+         * la prioridad de inmediatas obliga a T1 a esperar.
+         */
+        timedThread.start();
+
+        waitUntilThreadIsWaiting(
+                timedThread
+        );
+
+        assertTrue(
+                timedThread.isAlive()
+        );
+
+        /*
+         * [ACT]
+         *
+         * Ejecutamos T0.
+         *
+         * El observer desactiva T0 antes de que
+         * fireTransition(0) retorne.
+         */
+        assertTrue(
+                monitor.fireTransition(0)
+        );
+
+        /*
+         * T0 sigue habilitada estructuralmente:
+         *
+         * P0 = 1
+         *
+         * pero ya no participa de la prioridad.
+         */
+        assertTrue(
+                petriNet.isEnabled(0)
+        );
+
+        timedThread.join(2000);
+
+        // [ASSERT]
+        assertFalse(
+                timedThread.isAlive(),
+                "Inactive immediate transition must not block timed drain"
+        );
+
+        assertTrue(
+                timedResult.get()
+        );
+
+        assertArrayEquals(
+                new int[]{1, 0},
+                petriNet.getCurrentMarking()
+        );
+    }
+
     private void waitUntilThreadIsWaiting(
             Thread thread
     ) throws InterruptedException {

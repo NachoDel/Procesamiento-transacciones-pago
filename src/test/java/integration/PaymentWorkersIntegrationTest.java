@@ -15,11 +15,17 @@ import policy.RandomPolicy;
 
 import worker.WorkerCoordinator;
 
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntPredicate;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -33,18 +39,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * - tiempos configurados;
  * - RandomPolicy;
  * - Monitor real;
- * - Workers H0, H1, H2, H3 y H4.
+ * - Workers H0, H1, H2, H3 y H4;
+ * - shutdown selectivo de H0;
+ * - drenaje de operaciones admitidas.
  *
  * [SCOPE]
  *
- * Estos tests todavía no verifican:
+ * Estos tests todavía no representan la campaña experimental
+ * definitiva de 200 T-invariantes.
  *
- * - exactamente 200 T-invariantes;
- * - distribución estadística de políticas;
- * - logging experimental;
- * - duración final de 20-40 segundos.
+ * Utilizan targets reducidos para mantener rápida la suite.
  */
 class PaymentWorkersIntegrationTest {
+
+    /**
+     * [OFFICIAL-INITIAL-MARKING]
+     *
+     * M0 = (3,0,0,0,0,0,0,1,1,0)
+     */
+    private static final int[] INITIAL_MARKING = {
+            3, 0, 0, 0, 0,
+            0, 0, 1, 1, 0
+    };
 
     /**
      * [REAL-WORKERS / SMOKE-TEST]
@@ -113,17 +129,8 @@ class PaymentWorkersIntegrationTest {
      * Verifica que el sistema pueda ejecutarse varias veces
      * consecutivas dentro de la misma JVM.
      *
-     * [OBJECTIVE]
-     *
-     * Cada corrida construye:
-     *
-     * - una nueva PetriNet;
-     * - un nuevo Monitor;
-     * - nuevos Workers;
-     * - nuevos Threads.
-     *
-     * De esta forma comprobamos que una ejecución anterior
-     * no deja estado o Threads que afecten a la siguiente.
+     * Cada corrida construye una nueva PetriNet,
+     * Monitor, Workers y Threads.
      */
     @Test
     void shouldSupportMultipleConsecutiveExecutions()
@@ -192,7 +199,200 @@ class PaymentWorkersIntegrationTest {
     }
 
     /**
-     * [REAL-MONITOR-FACTORY]
+     * [DRAIN-SHUTDOWN-INTEGRATION]
+     *
+     * Valida sobre la Red de Petri y Workers oficiales
+     * el contrato acordado para una corrida:
+     *
+     * H0 admite exactamente TARGET transacciones
+     *          ↓
+     * se cierra únicamente H0
+     *          ↓
+     * H1-H4 continúan
+     *          ↓
+     * T9 alcanza TARGET
+     *          ↓
+     * la red vuelve a M0
+     *          ↓
+     * shutdown global
+     *
+     * [IMPORTANT]
+     *
+     * DrainProgressObserver es únicamente un test-double.
+     *
+     * No reemplaza al RunProgressTracker productivo
+     * perteneciente al runner experimental.
+     */
+    @Test
+    void shouldDrainExactlyTargetAdmissionsAndReturnToInitialMarking()
+            throws InterruptedException {
+
+        // [ARRANGE]
+        int target = 12;
+
+        PetriNet petriNet =
+                PaymentPetriNetConfig.createPetriNet();
+
+        DrainProgressObserver progress =
+                new DrainProgressObserver(
+                        target
+                );
+
+        MonitorInterface monitor =
+                createRealMonitor(
+                        petriNet,
+                        2026L,
+                        progress,
+                        progress::isTransitionAvailable
+                );
+
+        /*
+         * [SELECTIVE-STOP]
+         *
+         * Solamente H0 recibe la condición adicional
+         * de cierre de admisión.
+         *
+         * H1-H4 dependen únicamente del stop global
+         * administrado por WorkerCoordinator.
+         */
+        WorkerCoordinator coordinator =
+                new WorkerCoordinator(
+                        PaymentWorkerConfig
+                                .getDefinitions(),
+                        monitor,
+                        Map.of(
+                                "H0",
+                                progress::isAdmissionClosed
+                        )
+                );
+
+        try {
+
+            // [ACT]
+            coordinator.startAll();
+
+            /*
+             * [DRAIN]
+             *
+             * Esperamos hasta que T9 haya finalizado
+             * todas las transacciones admitidas.
+             */
+            boolean drained =
+                    progress.awaitTargetCompleted(
+                            10,
+                            TimeUnit.SECONDS
+                    );
+
+            assertTrue(
+                    drained,
+                    "The payment system did not drain within the expected time"
+            );
+
+            // [ASSERT - EXACT ADMISSIONS]
+            assertTrue(
+                    progress.isAdmissionClosed(),
+                    "Admission must be closed after reaching the target"
+            );
+
+            assertEquals(
+                    target,
+                    progress.getAdmissions(),
+                    "H0 must admit exactly TARGET transactions"
+            );
+
+            /*
+             * [ASSERT - EXACT COMPLETIONS]
+             *
+             * Cada disparo exitoso de T9 representa
+             * una transacción finalizada.
+             */
+            assertEquals(
+                    target,
+                    progress.getCompletions(),
+                    "All admitted transactions must reach T9"
+            );
+
+            /*
+             * [ASSERT - DRAINED MARKING]
+             *
+             * Una vez que todas las transacciones admitidas
+             * finalizaron, la red debe haber regresado a M0.
+             */
+            assertArrayEquals(
+                    INITIAL_MARKING,
+                    petriNet.getCurrentMarking(),
+                    "PetriNet must return to the official initial marking after drain"
+            );
+
+        } finally {
+
+            /*
+             * [GLOBAL-SHUTDOWN]
+             *
+             * Después del drenaje se solicita la parada
+             * global y se despiertan posibles Workers bloqueados.
+             */
+            stopAndJoin(
+                    coordinator
+            );
+        }
+
+        // [ASSERT - NO LEFTOVER THREADS]
+        assertTrue(
+                coordinator.isTerminated(),
+                "All workers must terminate after the drained run"
+        );
+    }
+
+    /**
+     * [DEFAULT-AVAILABILITY]
+     *
+     * En las ejecuciones normales todas las transiciones
+     * permanecen disponibles.
+     */
+    private MonitorInterface createRealMonitor(
+            PetriNet petriNet,
+            long seed,
+            PostFireObserver postFireObserver
+    ) {
+
+        return createRealMonitor(
+                petriNet,
+                seed,
+                postFireObserver,
+                transition -> true
+        );
+    }
+
+    /**
+     * [DYNAMIC-AVAILABILITY]
+     *
+     * Permite que un escenario de ejecución controle
+     * qué transiciones continúan participando.
+     */
+    private MonitorInterface createRealMonitor(
+            PetriNet petriNet,
+            long seed,
+            PostFireObserver postFireObserver,
+            IntPredicate transitionAvailability
+    ) {
+
+        return new Monitor(
+                petriNet,
+                new RandomPolicy(seed),
+                PaymentConflictConfig
+                        .getConflictGroups(),
+                PaymentPetriNetConfig
+                        .createTransitionSemantics(),
+                PaymentTimingConfig
+                        .createBaseline(),
+                postFireObserver,
+                transitionAvailability
+        );
+    }
+
+    /**
+     * [REAL-MONITOR / COUNTING-DECORATOR]
      *
      * Construye el Monitor real del sistema envuelto
      * exclusivamente con observabilidad de test.
@@ -203,15 +403,9 @@ class PaymentWorkersIntegrationTest {
     ) {
 
         MonitorInterface realMonitor =
-                new Monitor(
+                createRealMonitor(
                         petriNet,
-                        new RandomPolicy(seed),
-                        PaymentConflictConfig
-                                .getConflictGroups(),
-                        PaymentPetriNetConfig
-                                .createTransitionSemantics(),
-                        PaymentTimingConfig
-                                .createBaseline(),
+                        seed,
                         PostFireObserver.noop()
                 );
 
@@ -255,17 +449,15 @@ class PaymentWorkersIntegrationTest {
     /**
      * [TEST-CLEANUP]
      *
-     * Protocolo de cleanup utilizado únicamente
-     * por estos tests de integración.
-     *
-     * Todavía no representa el protocolo definitivo
-     * de finalización de una corrida experimental.
+     * Solicita stop global, despierta Workers bloqueados
+     * y espera que todos los Threads finalicen.
      */
     private void stopAndJoin(
             WorkerCoordinator coordinator
     ) throws InterruptedException {
 
         coordinator.requestStop();
+
         coordinator.interruptAll();
 
         assertTrue(
@@ -320,6 +512,147 @@ class PaymentWorkersIntegrationTest {
         int getSuccessfulFirings() {
 
             return successfulFirings.get();
+        }
+    }
+
+    /**
+     * [TEST-DOUBLE / DRAIN-PROGRESS]
+     *
+     * Simula exclusivamente dentro del test la parte mínima
+     * del contrato que posteriormente implementará
+     * RunProgressTracker.
+     *
+     * Observa:
+     *
+     * T0 -> admisión
+     * T9 -> finalización
+     *
+     * [THREAD-SAFETY]
+     *
+     * Utiliza AtomicInteger, AtomicBoolean y CountDownLatch
+     * porque sus valores son consultados desde threads
+     * diferentes a los que ejecutan los disparos.
+     */
+    private static class DrainProgressObserver
+            implements PostFireObserver {
+
+        private static final int ADMISSION_TRANSITION = 0;
+
+        private static final int COMPLETION_TRANSITION = 9;
+
+        private final int target;
+
+        private final AtomicInteger admissions =
+                new AtomicInteger(0);
+
+        private final AtomicInteger completions =
+                new AtomicInteger(0);
+
+        private final AtomicBoolean admissionClosed =
+                new AtomicBoolean(false);
+
+        private final CountDownLatch targetCompleted =
+                new CountDownLatch(1);
+
+        DrainProgressObserver(
+                int target
+        ) {
+
+            if (target <= 0) {
+
+                throw new IllegalArgumentException(
+                        "Target must be positive"
+                );
+            }
+
+            this.target =
+                    target;
+        }
+
+        /**
+         * [SYNCHRONOUS-PROGRESS]
+         *
+         * Monitor invoca este método después del commit
+         * y antes de retornar fireTransition().
+         *
+         * Esto permite cerrar H0 exactamente cuando
+         * ocurre T0 #TARGET.
+         */
+        @Override
+        public void onSuccessfulFire(
+                int transition,
+                int[] marking
+        ) {
+
+            if (transition
+                    == ADMISSION_TRANSITION) {
+
+                int currentAdmissions =
+                        admissions.incrementAndGet();
+
+                if (currentAdmissions == target) {
+
+                    admissionClosed.set(
+                            true
+                    );
+                }
+
+                return;
+            }
+
+            if (transition
+                    == COMPLETION_TRANSITION) {
+
+                int currentCompletions =
+                        completions.incrementAndGet();
+
+                if (currentCompletions == target) {
+
+                    targetCompleted.countDown();
+                }
+            }
+        }
+
+        boolean isAdmissionClosed() {
+
+            return admissionClosed.get();
+        }
+
+        int getAdmissions() {
+
+            return admissions.get();
+        }
+
+        int getCompletions() {
+
+            return completions.get();
+        }
+
+        boolean awaitTargetCompleted(
+                long timeout,
+                TimeUnit unit
+        ) throws InterruptedException {
+
+            return targetCompleted.await(
+                    timeout,
+                    unit
+            );
+        }
+        /**
+         * [EXECUTION-AVAILABILITY]
+         *
+         * La transición de admisión participa hasta alcanzar TARGET.
+         *
+         * Las restantes transiciones permanecen siempre disponibles
+         * para permitir el drenaje de operaciones en vuelo.
+         */
+        boolean isTransitionAvailable(
+                int transition
+        ) {
+
+            return transition
+                    != ADMISSION_TRANSITION
+                    || !admissionClosed.get();
         }
     }
 }
