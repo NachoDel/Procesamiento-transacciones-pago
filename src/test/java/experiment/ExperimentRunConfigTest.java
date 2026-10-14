@@ -37,7 +37,10 @@ class ExperimentRunConfigTest {
                         "results/logs/RANDOM_BASELINE_2026.log"
                 );
 
-        Duration timeout =
+        Duration executionTimeout =
+                Duration.ofSeconds(60);
+
+        Duration shutdownTimeout =
                 Duration.ofSeconds(5);
 
         ExperimentRunConfig config =
@@ -48,7 +51,8 @@ class ExperimentRunConfigTest {
                         timing,
                         200,
                         logPath,
-                        timeout
+                        executionTimeout,
+                        shutdownTimeout
                 );
 
         assertEquals(
@@ -82,7 +86,12 @@ class ExperimentRunConfigTest {
         );
 
         assertEquals(
-                timeout,
+                executionTimeout,
+                config.getExecutionTimeout()
+        );
+
+        assertEquals(
+                shutdownTimeout,
                 config.getShutdownTimeout()
         );
     }
@@ -98,6 +107,7 @@ class ExperimentRunConfigTest {
                         createTiming(),
                         200,
                         Path.of("run.log"),
+                        Duration.ofSeconds(60),
                         Duration.ofSeconds(3)
                 );
 
@@ -120,6 +130,7 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 200,
                                 Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(3)
                         )
         );
@@ -138,6 +149,7 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 200,
                                 Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(3)
                         )
         );
@@ -156,6 +168,7 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 0,
                                 Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(3)
                         )
         );
@@ -174,6 +187,7 @@ class ExperimentRunConfigTest {
                                 null,
                                 200,
                                 Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(3)
                         )
         );
@@ -192,13 +206,14 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 200,
                                 null,
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(3)
                         )
         );
     }
 
     @Test
-    void shouldRejectNonPositiveShutdownTimeout() {
+    void shouldRejectInvalidTimeouts() {
 
         assertThrows(
                 IllegalArgumentException.class,
@@ -210,6 +225,37 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 200,
                                 Path.of("run.log"),
+                                Duration.ZERO,
+                                Duration.ofSeconds(3)
+                        )
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new ExperimentRunConfig(
+                                ExperimentRunConfig.PolicyMode.RANDOM,
+                                2026L,
+                                "BASELINE",
+                                createTiming(),
+                                200,
+                                Path.of("run.log"),
+                                Duration.ofSeconds(-1),
+                                Duration.ofSeconds(3)
+                        )
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new ExperimentRunConfig(
+                                ExperimentRunConfig.PolicyMode.RANDOM,
+                                2026L,
+                                "BASELINE",
+                                createTiming(),
+                                200,
+                                Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ZERO
                         )
         );
@@ -224,9 +270,9 @@ class ExperimentRunConfigTest {
                                 createTiming(),
                                 200,
                                 Path.of("run.log"),
+                                Duration.ofSeconds(60),
                                 Duration.ofSeconds(-1)
                         )
         );
     }
 }
-

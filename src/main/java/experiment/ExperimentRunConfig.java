@@ -28,8 +28,7 @@ public final class ExperimentRunConfig {
     /**
      * [POLICY-MODE]
      *
-     * Políticas oficiales que pueden seleccionarse
-     * para una corrida experimental.
+     * Políticas oficiales disponibles para una corrida.
      */
     public enum PolicyMode {
 
@@ -40,11 +39,6 @@ public final class ExperimentRunConfig {
 
     private final PolicyMode policyMode;
 
-    /**
-     * Se conserva incluso para PRIORITY para mantener
-     * una identificación uniforme y reproducible
-     * de todas las corridas.
-     */
     private final long seed;
 
     /**
@@ -64,8 +58,18 @@ public final class ExperimentRunConfig {
     private final Path logPath;
 
     /**
-     * Timeout utilizado durante la terminación de
-     * los Workers.
+     * [EXECUTION-TIMEOUT]
+     *
+     * Tiempo máximo permitido para que la corrida
+     * alcance el target experimental.
+     */
+    private final Duration executionTimeout;
+
+    /**
+     * [SHUTDOWN-TIMEOUT]
+     *
+     * Tiempo máximo permitido para esperar la terminación
+     * de los Workers una vez solicitado el shutdown.
      */
     private final Duration shutdownTimeout;
 
@@ -76,6 +80,7 @@ public final class ExperimentRunConfig {
             TransitionTimingConfig timingConfig,
             int target,
             Path logPath,
+            Duration executionTimeout,
             Duration shutdownTimeout
     ) {
 
@@ -123,6 +128,20 @@ public final class ExperimentRunConfig {
                         "Log path cannot be null"
                 );
 
+        this.executionTimeout =
+                Objects.requireNonNull(
+                        executionTimeout,
+                        "Execution timeout cannot be null"
+                );
+
+        if (executionTimeout.isZero()
+                || executionTimeout.isNegative()) {
+
+            throw new IllegalArgumentException(
+                    "Execution timeout must be positive"
+            );
+        }
+
         this.shutdownTimeout =
                 Objects.requireNonNull(
                         shutdownTimeout,
@@ -162,6 +181,10 @@ public final class ExperimentRunConfig {
         return logPath;
     }
 
+    public Duration getExecutionTimeout() {
+        return executionTimeout;
+    }
+
     public Duration getShutdownTimeout() {
         return shutdownTimeout;
     }
@@ -184,4 +207,3 @@ public final class ExperimentRunConfig {
                 + seed;
     }
 }
-

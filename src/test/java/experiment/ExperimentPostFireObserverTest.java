@@ -7,16 +7,41 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * [EXPERIMENT-POST-FIRE-OBSERVER TESTS]
  *
- * Verifica que progreso y auditoría reciban exactamente
- * los mismos disparos exitosos.
+ * Verifica:
+ *
+ * - notificación de progreso;
+ * - notificación de auditoría;
+ * - cierre de admisión;
+ * - conteo de finalizaciones;
+ * - ejecución de ambos observers aunque uno falle;
+ * - publicación del primer error asincrónico.
  */
 class ExperimentPostFireObserverTest {
+
+    @Test
+    void shouldStartWithoutFailure() {
+
+        ExperimentPostFireObserver observer =
+                new ExperimentPostFireObserver(
+                        PostFireObserver.noop(),
+                        PostFireObserver.noop()
+                );
+
+        assertFalse(
+                observer.hasFailure()
+        );
+
+        assertTrue(
+                observer.getFailure().isEmpty()
+        );
+    }
 
     @Test
     void shouldNotifyProgressAndAudit() {
@@ -51,6 +76,10 @@ class ExperimentPostFireObserverTest {
                 1,
                 auditedEvents.get()
         );
+
+        assertFalse(
+                observer.hasFailure()
+        );
     }
 
     @Test
@@ -81,6 +110,10 @@ class ExperimentPostFireObserverTest {
         assertEquals(
                 1,
                 auditedEvents.get()
+        );
+
+        assertFalse(
+                observer.hasFailure()
         );
     }
 
@@ -113,6 +146,10 @@ class ExperimentPostFireObserverTest {
                 1,
                 auditedEvents.get()
         );
+
+        assertFalse(
+                observer.hasFailure()
+        );
     }
 
     @Test
@@ -138,18 +175,39 @@ class ExperimentPostFireObserverTest {
                         audit
                 );
 
-        assertThrows(
-                IllegalStateException.class,
-                () ->
-                        observer.onSuccessfulFire(
-                                0,
-                                new int[0]
-                        )
+        IllegalStateException failure =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                observer.onSuccessfulFire(
+                                        0,
+                                        new int[0]
+                                )
+                );
+
+        assertEquals(
+                "progress failure",
+                failure.getMessage()
         );
 
         assertEquals(
                 1,
                 auditedEvents.get()
+        );
+
+        assertTrue(
+                observer.hasFailure()
+        );
+
+        assertTrue(
+                observer.getFailure().isPresent()
+        );
+
+        assertEquals(
+                "progress failure",
+                observer.getFailure()
+                        .orElseThrow()
+                        .getMessage()
         );
     }
 
@@ -172,13 +230,19 @@ class ExperimentPostFireObserverTest {
                         failingAudit
                 );
 
-        assertThrows(
-                IllegalStateException.class,
-                () ->
-                        observer.onSuccessfulFire(
-                                0,
-                                new int[0]
-                        )
+        IllegalStateException failure =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                observer.onSuccessfulFire(
+                                        0,
+                                        new int[0]
+                                )
+                );
+
+        assertEquals(
+                "audit failure",
+                failure.getMessage()
         );
 
         assertEquals(
@@ -188,6 +252,17 @@ class ExperimentPostFireObserverTest {
 
         assertTrue(
                 tracker.isAdmissionClosed()
+        );
+
+        assertTrue(
+                observer.hasFailure()
+        );
+
+        assertEquals(
+                "audit failure",
+                observer.getFailure()
+                        .orElseThrow()
+                        .getMessage()
         );
     }
 
