@@ -137,6 +137,20 @@ public final class Monitor implements MonitorInterface {
     private final int[] waitingThreads;
 
     /**
+     * [CONFLICT-GRANTS]
+     *
+     * conflictGrants[i] contiene la transición que actualmente
+     * posee el turno lógico del grupo de conflicto i.
+     *
+     * -1 indica que no existe ningún grant activo.
+     *
+     * El grant NO modifica el marcado ni dispara transiciones.
+     * Solamente impide que otra alternativa del mismo conflicto
+     * se adelante mientras la seleccionada espera recursos.
+     */
+    private final int[] conflictGrants;
+
+    /**
      * [TEST-CONSTRUCTOR]
      *
      * Constructor package-private utilizado principalmente
@@ -295,6 +309,19 @@ public final class Monitor implements MonitorInterface {
         this.waitingThreads =
                 new int[transitionsCount];
 
+        this.conflictGrants =
+                new int[
+                        this.conflictGroups.size()
+                ];
+
+        for (int conflict = 0;
+             conflict < conflictGrants.length;
+             conflict++) {
+
+            conflictGrants[conflict] =
+                    -1;
+        }
+
         for (int transition = 0;
              transition < transitionsCount;
              transition++) {
@@ -328,33 +355,64 @@ public final class Monitor implements MonitorInterface {
             while (true) {
 
                 /*
+                 * [CONFLICT-ARBITRATION]
+                 *
+                 * Antes de evaluar el disparo se establece,
+                 * cuando corresponde, un grant lógico para
+                 * alguna de las solicitudes pendientes del
+                 * mismo conflicto.
+                 */
+                arbitrateConflictRequest(
+                        transition
+                );
+
+                /*
                  * [WAIT-UNTIL-FIREABLE]
                  *
-                 * Primero esperamos que el marcado y la semántica
-                 * permitan ejecutar esta transición.
+                 * Una transición puede esperar por:
+                 *
+                 * - marcado;
+                 * - disponibilidad;
+                 * - prioridad inmediata;
+                 * - grant de conflicto.
                  */
-                while (!canFireNow(transition)) {
+                while (!canFireNow(
+                        transition
+                )) {
 
                     boolean resumed =
-                            awaitTransition(transition);
+                            awaitTransition(
+                                    transition
+                            );
 
                     if (!resumed) {
+
+                        releaseConflictGrant(
+                                transition
+                        );
+
+                        timingCondition.signalAll();
 
                         signalEnabledWaitingTransitions();
 
                         return false;
                     }
+
+                    /*
+                     * El estado pudo cambiar mientras
+                     * la solicitud estaba esperando.
+                     */
+                    arbitrateConflictRequest(
+                            transition
+                    );
                 }
 
                 /*
                  * [TIMED-TRANSITION]
-                 *
-                 * Si es temporal, debe permanecer habilitada
-                 * durante su espera configurada.
-                 *
-                 * La espera NO conserva el lock.
                  */
-                if (transitionSemantics.isTimed(transition)) {
+                if (transitionSemantics.isTimed(
+                        transition
+                )) {
 
                     TimingWaitResult timingResult =
                             awaitTimedTransition(
@@ -364,29 +422,27 @@ public final class Monitor implements MonitorInterface {
                     if (timingResult
                             == TimingWaitResult.INTERRUPTED) {
 
+                        releaseConflictGrant(
+                                transition
+                        );
+
+                        timingCondition.signalAll();
+
                         signalEnabledWaitingTransitions();
 
                         return false;
                     }
 
-                    /*
-                     * [REVALIDATION]
-                     *
-                     * Si durante la espera el estado cambió
-                     * y la transición dejó de poder dispararse,
-                     * volvemos al inicio.
-                     */
                     if (timingResult
                             == TimingWaitResult.RETRY) {
 
                         continue;
                     }
 
-                    /*
-                     * Incluso al vencer el tiempo realizamos una
-                     * última validación bajo exclusión mutua.
-                     */
-                    if (!canFireNow(transition)) {
+                    if (!canFireNow(
+                            transition
+                    )) {
+
                         continue;
                     }
                 }
@@ -394,53 +450,54 @@ public final class Monitor implements MonitorInterface {
                 /*
                  * [CRITICAL-SECTION]
                  *
-                 * El disparo real ocurre con el lock tomado.
+                 * El disparo real sigue dependiendo
+                 * exclusivamente de PetriNet.
                  */
                 boolean fired =
-                        petriNet.fire(transition);
+                        petriNet.fire(
+                                transition
+                        );
 
-                if (fired) {
+                if (!fired) {
 
-                    /*
-                     * [COMMITTED-MARKING]
-                     *
-                     * El marcado se obtiene después del disparo
-                     * y mientras el lock continúa tomado.
-                     */
-                    int[] committedMarking =
-                            petriNet.getCurrentMarking();
-
-                    /*
-                     * [POST-FIRE-AUDIT]
-                     *
-                     * Verificación y logging ocurren antes de que
-                     * otro thread pueda realizar un nuevo disparo.
-                     *
-                     * Esto preserva el orden real de commits
-                     * de la Red de Petri.
-                     */
-                    postFireObserver.onSuccessfulFire(
-                            transition,
-                            committedMarking
+                    releaseConflictGrant(
+                            transition
                     );
 
-                    /*
-                     * [TIMING-REVALIDATION]
-                     *
-                     * Un nuevo marcado puede afectar temporizadores
-                     * que se encuentran actualmente esperando.
-                     */
                     timingCondition.signalAll();
 
-                    /*
-                     * [CONDITIONAL-REACTIVATION]
-                     *
-                     * El nuevo marcado puede habilitar otros threads.
-                     */
                     signalEnabledWaitingTransitions();
+
+                    return false;
                 }
 
-                return fired;
+                /*
+                 * El grant termina solamente cuando la
+                 * transición seleccionada efectivamente
+                 * realiza su disparo.
+                 */
+                releaseConflictGrant(
+                        transition
+                );
+
+                int[] committedMarking =
+                        petriNet.getCurrentMarking();
+
+                postFireObserver.onSuccessfulFire(
+                        transition,
+                        committedMarking
+                );
+
+                /*
+                 * Tanto un cambio de marcado como la
+                 * liberación de un grant pueden modificar
+                 * qué temporales pueden progresar.
+                 */
+                timingCondition.signalAll();
+
+                signalEnabledWaitingTransitions();
+
+                return true;
             }
 
         } finally {
@@ -456,16 +513,29 @@ public final class Monitor implements MonitorInterface {
      *
      * 1. está sensibilizada en PetriNet;
      * 2. está disponible en la fase actual;
-     * 3. si es temporal, no existe una inmediata
-     *    sensibilizada y disponible.
+     * 3. no perdió el grant de su conflicto;
+     * 4. si es temporal, no existe una inmediata
+     *    habilitada y permitida para avanzar.
      */
-    private boolean canFireNow(int transition) {
+    private boolean canFireNow(
+            int transition
+    ) {
 
-        if (!petriNet.isEnabled(transition)) {
+        if (!petriNet.isEnabled(
+                transition
+        )) {
+
             return false;
         }
 
         if (!transitionAvailability.test(
+                transition
+        )) {
+
+            return false;
+        }
+
+        if (!isAllowedByConflictGrant(
                 transition
         )) {
 
@@ -485,14 +555,19 @@ public final class Monitor implements MonitorInterface {
     /**
      * [IMMEDIATE-PRIORITY]
      *
-     * Una inmediata solamente bloquea temporales cuando:
+     * Una transición inmediata solamente bloquea
+     * a una temporal cuando realmente puede competir:
      *
      * - está sensibilizada;
-     * - es inmediata;
-     * - continúa disponible en la fase actual.
+     * - está disponible;
+     * - no está bloqueada por un grant de conflicto.
      *
-     * Una transición estructuralmente habilitada pero
-     * desactivada por lifecycle no debe impedir el drenaje.
+     * Esto evita el ciclo:
+     *
+     * inmediata pierde grant
+     *      -> bloquea temporal
+     *      -> temporal no libera recurso
+     *      -> transición con grant nunca se habilita.
      */
     private boolean hasEnabledImmediateTransition() {
 
@@ -507,6 +582,9 @@ public final class Monitor implements MonitorInterface {
                             transition
                     )
                     && transitionAvailability.test(
+                            transition
+                    )
+                    && isAllowedByConflictGrant(
                             transition
                     )) {
 
@@ -599,77 +677,365 @@ public final class Monitor implements MonitorInterface {
     }
 
     /**
-     * [WAITING-THREAD-REACTIVATION]
+     * [CONFLICT-ARBITRATION]
      *
-     * Reactiva las transiciones que pueden continuar.
+     * Si una solicitud pertenece a un grupo de conflicto
+     * y existen otras solicitudes pendientes del mismo grupo,
+     * Policy selecciona cuál obtiene el grant.
      *
-     * Policy solamente interviene dentro de un conflicto real.
+     * Las candidatas deben continuar disponibles para la
+     * ejecución, pero NO necesitan estar todavía sensibilizadas.
+     *
+     * El grant no permite disparar una transición inválida:
+     * PetriNet.isEnabled() continúa siendo obligatorio dentro
+     * de canFireNow().
      */
-    private void signalEnabledWaitingTransitions() {
+    private void arbitrateConflictRequest(
+            int transition
+    ) {
 
-        List<Integer> enabledWaiting =
-                collectEnabledWaitingTransitions();
+        if (!transitionAvailability.test(
+                transition
+        )) {
 
-        if (enabledWaiting.isEmpty()) {
             return;
         }
+
+        int conflictIndex =
+                findConflictGroupIndex(
+                        transition
+                );
+
+        if (conflictIndex < 0) {
+
+            return;
+        }
+
+        /*
+         * Ya existe una decisión pendiente.
+         *
+         * Se conserva hasta que la transición seleccionada
+         * dispare o su solicitud sea abortada.
+         */
+        if (conflictGrants[conflictIndex]
+                >= 0) {
+
+            return;
+        }
+
+        ConflictGroup conflictGroup =
+                conflictGroups.get(
+                        conflictIndex
+                );
+
+        List<Integer> candidates =
+                new ArrayList<>();
+
+        for (int candidate
+                : conflictGroup.getTransitions()) {
+
+            if (candidate == transition) {
+
+                continue;
+            }
+
+            if (waitingThreads[candidate] > 0
+                    && transitionAvailability.test(
+                            candidate
+                    )) {
+
+                candidates.add(
+                        candidate
+                );
+            }
+        }
+
+        /*
+         * La solicitud actual todavía no figura en
+         * waitingThreads porque posee el lock.
+         */
+        candidates.add(
+                transition
+        );
+
+        /*
+         * Sin competencia real no hace falta Policy
+         * ni un grant persistente.
+         */
+        if (candidates.size() <= 1) {
+
+            return;
+        }
+
+        candidates.sort(
+                Integer::compareTo
+        );
+
+        int selectedTransition =
+                selectByPolicy(
+                        candidates
+                );
+
+        conflictGrants[conflictIndex] =
+                selectedTransition;
+
+        /*
+         * El nuevo grant también modifica qué
+         * transiciones inmediatas deben considerarse
+         * bloqueantes para las temporales.
+         */
+        timingCondition.signalAll();
+
+        /*
+         * Reactivamos todo lo que ahora pueda progresar.
+         * El propio método respeta el grant recién creado.
+         */
+        signalEnabledWaitingTransitions();
+    }
+
+    /**
+     * Busca el grupo de conflicto al que pertenece
+     * una transición.
+     *
+     * Los grupos fueron validados como disjuntos
+     * durante la construcción del Monitor.
+     */
+    private int findConflictGroupIndex(
+            int transition
+    ) {
+
+        for (int index = 0;
+             index < conflictGroups.size();
+             index++) {
+
+            if (conflictGroups
+                    .get(index)
+                    .getTransitions()
+                    .contains(transition)) {
+
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Una transición perteneciente a un conflicto puede
+     * avanzar cuando:
+     *
+     * - no existe grant activo; o
+     * - ella misma posee el grant.
+     */
+    private boolean isAllowedByConflictGrant(
+            int transition
+    ) {
+
+        int conflictIndex =
+                findConflictGroupIndex(
+                        transition
+                );
+
+        if (conflictIndex < 0) {
+
+            return true;
+        }
+
+        int grantedTransition =
+                conflictGrants[
+                        conflictIndex
+                ];
+
+        return grantedTransition < 0
+                || grantedTransition
+                == transition;
+    }
+
+    /**
+     * Libera el grant únicamente cuando pertenece
+     * a la transición indicada.
+     */
+    private void releaseConflictGrant(
+            int transition
+    ) {
+
+        int conflictIndex =
+                findConflictGroupIndex(
+                        transition
+                );
+
+        if (conflictIndex < 0) {
+
+            return;
+        }
+
+        if (conflictGrants[conflictIndex]
+                == transition) {
+
+            conflictGrants[conflictIndex] =
+                    -1;
+        }
+    }
+
+    /**
+     * [WAITING-THREAD-REACTIVATION]
+     *
+     * Reactiva solicitudes pendientes respetando:
+     *
+     * - grants de conflictos;
+     * - Policy;
+     * - sensibilización;
+     * - disponibilidad;
+     * - prioridad inmediata/temporal.
+     */
+    private void signalEnabledWaitingTransitions() {
 
         boolean[] handled =
                 new boolean[
                         petriNet.getTransitionsCount()
                 ];
 
-        for (ConflictGroup conflictGroup
-                : conflictGroups) {
+        /*
+         * Primero resolvemos los conflictos.
+         *
+         * Esto es importante porque la existencia de un
+         * grant puede cambiar inmediatamente qué transiciones
+         * temporales están autorizadas para avanzar.
+         */
+        for (int conflictIndex = 0;
+             conflictIndex < conflictGroups.size();
+             conflictIndex++) {
 
-            List<Integer> conflictCandidates =
-                    conflictGroup.filterCandidates(
-                            enabledWaiting
+            ConflictGroup conflictGroup =
+                    conflictGroups.get(
+                            conflictIndex
                     );
 
-            if (conflictCandidates.isEmpty()) {
+            for (int transition
+                    : conflictGroup.getTransitions()) {
+
+                handled[transition] =
+                        true;
+            }
+
+            int grantedTransition =
+                    conflictGrants[
+                            conflictIndex
+                    ];
+
+            /*
+             * Si ya existe grant, solamente su titular
+             * puede ser reactivado dentro del conflicto.
+             */
+            if (grantedTransition >= 0) {
+
+                if (waitingThreads[
+                        grantedTransition
+                ] > 0
+                        && canFireNow(
+                                grantedTransition
+                        )) {
+
+                    signalTransition(
+                            grantedTransition
+                    );
+                }
+
                 continue;
             }
 
-            for (int transition
-                    : conflictCandidates) {
+            List<Integer> pendingCandidates =
+                    new ArrayList<>();
 
-                handled[transition] = true;
+            for (int transition
+                    : conflictGroup.getTransitions()) {
+
+                if (waitingThreads[
+                        transition
+                ] > 0
+                        && transitionAvailability.test(
+                                transition
+                        )) {
+
+                    pendingCandidates.add(
+                            transition
+                    );
+                }
+            }
+
+            if (pendingCandidates.isEmpty()) {
+
+                continue;
+            }
+
+            pendingCandidates.sort(
+                    Integer::compareTo
+            );
+
+            /*
+             * Una sola solicitud pendiente no necesita
+             * una decisión de Policy.
+             */
+            if (pendingCandidates.size()
+                    == 1) {
+
+                int onlyTransition =
+                        pendingCandidates.get(
+                                0
+                        );
+
+                if (canFireNow(
+                        onlyTransition
+                )) {
+
+                    signalTransition(
+                            onlyTransition
+                    );
+                }
+
+                continue;
             }
 
             /*
-             * Si solo existe una alternativa disponible,
-             * no hace falta consultar Policy.
+             * Con varias solicitudes pendientes,
+             * Policy establece un grant persistente.
              */
-            if (conflictCandidates.size() == 1) {
-
-                signalTransition(
-                        conflictCandidates.get(0)
-                );
-
-                continue;
-            }
-
             int selectedTransition =
                     selectByPolicy(
-                            conflictCandidates
+                            pendingCandidates
                     );
 
-            signalTransition(
+            conflictGrants[
+                    conflictIndex
+            ] =
+                    selectedTransition;
+
+            if (canFireNow(
                     selectedTransition
-            );
+            )) {
+
+                signalTransition(
+                        selectedTransition
+                );
+            }
         }
 
         /*
-         * [INDEPENDENT-TRANSITIONS]
+         * Recalculamos DESPUÉS de establecer grants.
          *
-         * Transiciones que no pertenecen a un conflicto
-         * pueden continuar sin pasar por Policy.
+         * Así una temporal que antes estaba bloqueada por
+         * una inmediata perdedora puede quedar habilitada
+         * inmediatamente.
          */
+        List<Integer> enabledWaiting =
+                collectEnabledWaitingTransitions();
+
         for (int transition
                 : enabledWaiting) {
 
-            if (!handled[transition]) {
+            if (!handled[
+                    transition
+            ]) {
 
                 signalTransition(
                         transition
