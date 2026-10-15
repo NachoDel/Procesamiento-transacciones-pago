@@ -87,6 +87,37 @@ El warning de conexión a `apache.snapshots` no impidió compilar, probar ni emp
 
 **Pendiente:** realizar las pruebas desde clones limpios en Windows y Linux. Actualizar las filas de la matriz anterior sólo después de completar cada una.
 
+### Validación desde clon limpio — Windows
+
+**Fecha:** 15/10/2026
+
+**Entorno:**
+- Windows 11 (amd64).
+- Eclipse Temurin JDK 17.0.20.1.
+- Apache Maven 3.10.0.
+- PowerShell.
+- Commit: `aaf18fc7a7bd2292cf057febc25a5cbf974ef48f`.
+- Clon independiente en una carpeta con espacios.
+
+**Pruebas realizadas:**
+- Compilación limpia: exitosa.
+- Suite Maven: 174 tests, 0 fallas, 0 errores.
+- Empaquetado JAR: exitoso.
+- `Main --help`: exitoso.
+- RANDOM: 12 admisiones, 12 finalizaciones.
+- PRIORITY: 12 admisiones, 12 finalizaciones.
+- P-invariantes y T-invariantes: válidos.
+- Workers terminados: sí.
+
+**Resultado:** VALIDACIÓN EXITOSA.
+
+**Evidencia local:**
+`results/portability/windows/20261015_115119/`
+
+La ejecución utilizó `--target=12` y `--scale=0.01`
+como prueba funcional rápida, no como campaña
+experimental de rendimiento.
+
 ## Criterios de cierre
 
 - [ ] La prueba de Windows pasa desde un clon limpio.
