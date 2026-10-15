@@ -1,0 +1,3 @@
+# Reportes locales: no subir automaticamente los logs generados.
+*
+!.gitignore
