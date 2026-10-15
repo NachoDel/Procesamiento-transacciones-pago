@@ -272,7 +272,9 @@ public final class CampaignSummaryWriter {
                 tInvariantsValid,
                 workersTerminated,
                 escapeCsv(
-                        config.getLogPath().toString()
+                        toPortablePath(
+                                config.getLogPath()
+                        )
                 ),
                 successful,
                 escapeCsv(
@@ -281,6 +283,27 @@ public final class CampaignSummaryWriter {
                 escapeCsv(
                         errorMessage
                 )
+        );
+    }
+
+    /**
+     * [PORTABLE-CSV-PATH]
+     *
+     * El archivo CSV utiliza '/' para representar rutas en
+     * cualquier sistema operativo. Esto no modifica el Path
+     * usado para crear o leer el log real.
+     *
+     * Windows: results\\logs\\run.log
+     * Linux:   results/logs/run.log
+     * CSV:     results/logs/run.log
+     */
+    private static String toPortablePath(
+            Path path
+    ) {
+
+        return path.toString().replace(
+                '\\',
+                '/'
         );
     }
 

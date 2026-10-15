@@ -113,6 +113,59 @@ class CampaignSummaryWriterTest {
         );
     }
 
+    /**
+     * [CROSS-PLATFORM-CSV]
+     *
+     * El separador representado en la columna logPath
+     * debe ser estable incluso si se recibe una ruta
+     * expresada con barras invertidas.
+     */
+    @Test
+    void shouldNormalizeBackslashesInCsvLogPath()
+            throws Exception {
+
+        Path outputPath =
+                tempDirectory.resolve(
+                        "portable.csv"
+                );
+
+        ExperimentRunConfig config =
+                new ExperimentRunConfig(
+                        ExperimentRunConfig.PolicyMode.RANDOM,
+                        2042L,
+                        "BASELINE",
+                        TransitionTimingConfig.noDelays(10),
+                        200,
+                        Path.of(
+                                "results\\logs\\RANDOM_BASELINE_2042.log"
+                        ),
+                        Duration.ofSeconds(60),
+                        Duration.ofSeconds(5)
+                );
+
+        CampaignRunRecord record =
+                CampaignRunRecord.fromFailure(
+                        config,
+                        new IllegalStateException("Test failure")
+                );
+
+        new CampaignSummaryWriter().write(
+                outputPath,
+                List.of(record)
+        );
+
+        String row =
+                Files.readAllLines(
+                        outputPath
+                ).get(1);
+
+        assertTrue(
+                row.contains(
+                        "results/logs/RANDOM_BASELINE_2042.log"
+                )
+        );
+    }
+
     @Test
     void shouldWriteInvalidResultToCsv()
             throws Exception {
