@@ -1,0 +1,75 @@
+@startuml
+' T5.1.3 — Vista complementaria de clases para campañas experimentales
+' Fuente: src/main/java del commit 184ca21b6fa6837f9ac989cad0694390588f71bf
+!pragma layout smetana
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam linetype ortho
+hide empty fields
+hide circle
+left to right direction
+
+package "app" {
+  class Main <<corrida individual>> {
+    {static} +main(args: String[]): void
+  }
+}
+package "experiment" {
+  class ExperimentRunner {
+    +run(config: ExperimentRunConfig): ExperimentRunResult
+  }
+  class ExperimentRunConfig <<inmutable>> {
+    +getRunId(): String
+  }
+  class ExperimentRunResult <<inmutable>> {
+    +isSuccessful(): boolean
+  }
+  class CampaignPlan <<static>> {
+    {static} +createFormalCampaign(...): List<ExperimentRunConfig>
+    {static} +getShutdownTimeout(): Duration
+  }
+  class CampaignExecutor {
+    +execute(configs: List<ExperimentRunConfig>, summaryPath: Path): List<CampaignRunRecord>
+  }
+  interface "CampaignExecutor.RunExecutor" as RunExecutor <<functional>> {
+    +run(config: ExperimentRunConfig): ExperimentRunResult
+  }
+  class CampaignRunRecord <<inmutable>>
+  class CampaignSummaryWriter {
+    +write(path: Path, records: List<CampaignRunRecord>): void
+  }
+  class FormalCampaignMain <<entrypoint>> {
+    {static} +main(args: String[]): void
+  }
+  class CalibrationMain <<entrypoint>> {
+    {static} +main(args: String[]): void
+  }
+}
+
+Main ..> ExperimentRunner : 1 corrida
+FormalCampaignMain ..> CampaignPlan : obtiene configuraciones
+FormalCampaignMain ..> CampaignExecutor : lanza campaña
+CalibrationMain ..> ExperimentRunner : calibra corridas
+CampaignPlan ..> ExperimentRunConfig : construye muchas
+CampaignExecutor *-- RunExecutor : ejecuta una por una
+CampaignExecutor *-- CampaignSummaryWriter : persiste CSV
+CampaignExecutor ..> CampaignRunRecord : produce
+RunExecutor ..> ExperimentRunConfig
+RunExecutor ..> ExperimentRunResult
+ExperimentRunner ..> ExperimentRunConfig
+ExperimentRunner ..> ExperimentRunResult : devuelve
+CampaignRunRecord o-- "0..1" ExperimentRunResult : resultado disponible
+CampaignRunRecord --> ExperimentRunConfig : identifica corrida
+
+note bottom of CampaignExecutor
+  En produccion RunExecutor delega a
+  ExperimentRunner::run. La interfaz funcional
+  permite simular corridas en los tests.
+end note
+note bottom of CampaignSummaryWriter
+  La ruta del log se normaliza para CSV
+  con separadores / en Windows y Linux.
+end note
+@enduml

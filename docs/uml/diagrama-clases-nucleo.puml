@@ -1,0 +1,158 @@
+@startuml
+' T5.1.3 — Diagrama de clases del nucleo de ejecucion
+' Basado en src/main/java del commit 184ca21b6fa6837f9ac989cad0694390588f71bf
+' Se usa el motor normal de PlantUML / Graphviz (DOT).
+' No forzar !pragma layout smetana: provocaba IllegalStateException en mincross.
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam linetype polyline
+hide empty fields
+hide circle
+left to right direction
+
+package "app" {
+  class Main <<entrypoint>> {
+    {static} +main(args: String[]): void
+  }
+}
+
+package "experiment" {
+  class ExperimentRunner <<orquestador>> {
+    +run(config: ExperimentRunConfig): ExperimentRunResult
+  }
+  class ExperimentRunConfig <<inmutable>> {
+    +getPolicyMode(): PolicyMode
+    +getTarget(): int
+    +getLogPath(): Path
+  }
+  class ExperimentRunResult <<inmutable>> {
+    +getIt1Count(): int
+    +getIt2Count(): int
+    +getIt3Count(): int
+    +isSuccessful(): boolean
+  }
+  class RunProgressTracker {
+    +isAdmissionClosed(): boolean
+    +isTargetCompleted(): boolean
+  }
+  class ExperimentPostFireObserver {
+    +onSuccessfulFire(t: int, marking: int[]): void
+  }
+}
+
+package "monitor" {
+  interface MonitorInterface {
+    +fireTransition(t: int): boolean
+  }
+  class Monitor {
+    -lock: ReentrantLock
+    -transitionAvailability: IntPredicate
+    +fireTransition(t: int): boolean
+  }
+  interface PostFireObserver {
+    +onSuccessfulFire(t: int, marking: int[]): void
+  }
+}
+
+package "petri" {
+  class PetriNet {
+    +isEnabled(t: int): boolean
+    +fire(t: int): boolean
+    +getCurrentMarking(): int[]
+  }
+}
+
+package "policy" {
+  interface Policy {
+    +select(candidates: List<Integer>): OptionalInt
+  }
+  class RandomPolicy
+  class PriorityPolicy
+  class ConflictGroup
+}
+
+package "timing" {
+  class TransitionSemantics {
+    +isImmediate(t: int): boolean
+  }
+  class TransitionTimingConfig {
+    +getDelayMillis(t: int): long
+  }
+}
+
+package "worker" {
+  class WorkerCoordinator {
+    +startAll(): void
+    +requestStop(): void
+    +interruptAll(): void
+    +awaitTermination(timeout: long, unit: TimeUnit): boolean
+  }
+  class Worker {
+    +run(): void
+  }
+}
+
+package "verification" {
+  class ExecutionAudit {
+    +onSuccessfulFire(t: int, marking: int[]): void
+  }
+  class PlaceInvariantChecker {
+    +verify(marking: int[]): VerificationResult
+  }
+  class TInvariantAnalyzer {
+    +analyze(logPath: Path): AnalysisResult
+  }
+}
+
+package "logging" {
+  class ExecutionLogger <<AutoCloseable>> {
+    +logTransition(t: int): void
+    +close(): void
+  }
+}
+
+' Interfaces e implementaciones
+MonitorInterface <|.. Monitor
+Policy <|.. RandomPolicy
+Policy <|.. PriorityPolicy
+PostFireObserver <|.. RunProgressTracker
+PostFireObserver <|.. ExperimentPostFireObserver
+PostFireObserver <|.. ExecutionAudit
+
+' Entrada y orquestacion
+Main ..> ExperimentRunner : inicia corrida
+Main ..> ExperimentRunConfig : configura
+ExperimentRunner ..> ExperimentRunResult : devuelve
+ExperimentRunner ..> Monitor : ensambla
+ExperimentRunner ..> WorkerCoordinator : inicia/detiene
+ExperimentRunner ..> ExperimentPostFireObserver : conecta
+ExperimentRunner ..> TInvariantAnalyzer : analisis post-run
+
+' Nucleo de sincronizacion
+Monitor --> PetriNet : protege
+Monitor --> Policy : arbitra
+Monitor --> ConflictGroup : conflictos
+Monitor --> TransitionSemantics : tipo de transicion
+Monitor --> TransitionTimingConfig : retardo temporal
+Monitor --> PostFireObserver : callback bajo lock
+
+' Workers y observadores
+WorkerCoordinator --> Worker : administra
+Worker --> MonitorInterface : solicita disparos
+ExperimentPostFireObserver --> RunProgressTracker : progreso T0/T9
+ExperimentPostFireObserver --> ExecutionAudit : audita disparos
+ExecutionAudit --> PlaceInvariantChecker : comprueba P-invariantes
+ExecutionAudit --> ExecutionLogger : registra log
+
+note bottom of Monitor
+  La disponibilidad dinamica es un IntPredicate.
+  Monitor NO conoce T0, T9, H0 ni TARGET.
+end note
+
+note bottom of TInvariantAnalyzer
+  IT1, IT2 e IT3 se cuentan tras detener
+  Workers y cerrar ExecutionLogger.
+end note
+@enduml
