@@ -1,0 +1,121 @@
+@startuml
+' T5.1.3 — Corrida individual, disparos y cierre por drenaje
+' Fuente: src/main/java del commit 184ca21b6fa6837f9ac989cad0694390588f71bf
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 85
+autonumber
+actor "Usuario / consola" as Usuario
+participant "app.Main" as Main
+participant "ExperimentRunner" as Runner
+participant "RunProgressTracker" as Tracker
+participant "WorkerCoordinator" as Coordinator
+participant "Worker H0..H4" as Worker
+participant "Monitor" as Monitor
+participant "PetriNet" as Petri
+participant "Policy" as Policy
+participant "ExperimentPostFireObserver" as Observer
+participant "ExecutionAudit" as Audit
+participant "ExecutionLogger" as Logger
+participant "TInvariantAnalyzer" as Analyzer
+
+Usuario -> Main : main(args)
+Main -> Main : parseOptions(args) / crear config
+Main -> Runner : run(config)
+activate Runner
+Runner -> Petri : crear red y marcado inicial
+Runner -> Tracker : new RunProgressTracker(TARGET)
+Runner -> Logger : new ExecutionLogger(path, policy, seed, timing)
+Runner -> Audit : new ExecutionAudit(checker, logger)
+Runner -> Observer : new ExperimentPostFireObserver(tracker, audit)
+Runner -> Monitor : new Monitor(red, policy, conflictos, tiempos,\nobserver, transitionAvailability)
+note right of Monitor
+  transitionAvailability(T0) = !admissionClosed
+  Para las demas transiciones: true
+end note
+Runner -> Coordinator : new WorkerCoordinator(definiciones, monitor,\nH0 -> tracker::isAdmissionClosed)
+Runner -> Coordinator : startAll()
+Coordinator -> Worker : start H0, H1, H2, H3, H4
+
+== Fase concurrente: ejecuciones intercaladas ==
+loop Cada intento de disparo de algun Worker
+  Worker -> Monitor : fireTransition(t)
+  activate Monitor
+  Monitor -> Petri : isEnabled(t)
+  Petri --> Monitor : sensibilizada o no
+  opt conflicto {T1, T4, T6} con alternativas
+    Monitor -> Policy : select(candidatas)
+    Policy --> Monitor : transicion seleccionada
+  end
+  alt no puede dispararse aun (reintenta)
+    Monitor -> Monitor : Condition.await() / libera lock\ny reevalua al despertar
+  else t temporal y sensibilizada
+    Monitor -> Monitor : espera demora configurada\nliberando lock y revalida
+  end
+  note over Monitor
+    El disparo ocurre solo si: sensibilizada,
+    disponible, permitida por conflicto
+    y respetando inmediata > temporal.
+  end note
+  Monitor -> Petri : fire(t)
+  Petri --> Monitor : true / marcado actualizado
+  Monitor -> Observer : onSuccessfulFire(t, marcado)
+  activate Observer
+  Observer -> Tracker : onSuccessfulFire(t, marcado)
+  activate Tracker
+  alt t = T0 y admisiones alcanzan TARGET
+    Tracker -> Tracker : admissions++ / isAdmissionClosed() pasa a true
+    note right of Tracker
+      H0 ya no inicia nuevos ciclos.
+      T0 deja de participar de prioridad inmediata.
+    end note
+  else t = T9
+    Tracker -> Tracker : completions++
+  else otra transicion
+    Tracker -> Tracker : sin cambio en contadores
+  end
+  Tracker --> Observer : retorna
+  deactivate Tracker
+  Observer -> Audit : onSuccessfulFire(t, marcado)
+  activate Audit
+  Audit -> Audit : PlaceInvariantChecker.verify(marcado)
+  Audit -> Logger : logTransition(t)
+  Logger --> Audit : registrado
+  Audit --> Observer : retorna
+  deactivate Audit
+  Observer --> Monitor : retorna
+  deactivate Observer
+  Monitor -> Monitor : signalAll(timing) y señalizacion\nde esperas por transicion
+  Monitor --> Worker : true
+  deactivate Monitor
+end
+
+== Cierre por drenaje ==
+note over Tracker,Worker
+  Al observar el T0 numero TARGET, H0 cesa.
+  H1, H2, H3 y H4 continuan procesando lo admitido.
+  El Runner sigue esperando hasta T9 = TARGET.
+end note
+loop Espera coordinadora (poll ~5 ms)
+  Runner -> Tracker : isTargetCompleted()
+  Tracker --> Runner : false, hasta T9 = TARGET
+end
+Runner -> Tracker : isTargetCompleted()
+Tracker --> Runner : true
+Runner -> Coordinator : requestStop()
+Runner -> Coordinator : interruptAll()
+Runner -> Coordinator : awaitTermination(timeout)
+Coordinator --> Runner : workersTerminated
+Runner -> Logger : close()
+
+== Verificacion post-run ==
+Runner -> Analyzer : analyze(logPath)
+Analyzer --> Runner : IT1, IT2, IT3 y validez
+Runner -> Runner : new ExperimentRunResult(...)
+Runner --> Main : ExperimentRunResult
+Main -> Main : mostrar conteos, duracion y validaciones
+Main --> Usuario : resultado de la corrida
+deactivate Runner
+@enduml
