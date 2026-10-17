@@ -6,7 +6,7 @@ Sistema de procesamiento concurrente de transacciones de pago modelado con una R
 
 - JDK 17 o superior.
 - Maven compatible con el proyecto (se recomienda Maven 3.9+).
-- Windows, Linux o macOS. No se requiere un IDE específico.
+- Windows y Linux validados. No se requiere un IDE específico.
 
 ## Compilar y ejecutar pruebas
 
@@ -90,7 +90,7 @@ Esta prueba rápida es de diagnóstico: sus tiempos no sirven para validar el re
 
 ## Ejecuciones experimentales formales
 
-`app.Main` ejecuta **una única corrida**. No sustituye las campañas de DEV4, que están implementadas en `experiment.FormalCampaignMain`.
+`app.Main` ejecuta **una única corrida**. Las campañas experimentales formales se ejecutan mediante `experiment.FormalCampaignMain`.
 
 Para ejecutar una campaña formal (20 corridas, configuración temporal ya calibrada):
 
@@ -117,3 +117,15 @@ src/main/java/
 ```
 
 La política de ramas utiliza `develop` para integración y `main` para versiones estables. Las tareas se integran mediante Pull Requests.
+
+
+## Documentación técnica
+
+- [Modelo formal de la Red de Petri](docs/dev1/modelo-formal-rdp.md) y [validación en PIPE](docs/pipe-analysis.md).
+- [Responsabilidades de los hilos](docs/hilos-rdp.md) y [decisiones de concurrencia](docs/ADR/).
+- [Modelo temporal analítico](docs/performance/time-model.md) y [análisis experimental](docs/analisis-T4.2.3.md).
+- [Runner](docs/runner-experimental.md), [formato de log](docs/log-format.md) y [protocolo experimental](docs/protocolo-experimentos.md).
+- [Diagramas UML de clases y secuencia](docs/uml/README.md).
+- [Validación de portabilidad en Windows y Linux](docs/portabilidad.md).
+
+Las verificaciones técnicas y de portabilidad se documentan en el repositorio. El informe final es un entregable independiente.
