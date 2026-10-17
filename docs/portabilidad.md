@@ -2,128 +2,115 @@
 
 ## Objetivo
 
-Probar desde consola que un **clon limpio** del proyecto se compila y ejecuta en Windows y Linux sin depender de un IDE, rutas locales fijas ni permisos específicos sobre archivos fuente.
+Verificar que el proyecto puede compilarse, probarse y ejecutarse desde **clones limpios** en **Windows y Linux**, sin depender del IDE, de los archivos compilados previamente ni de rutas absolutas específicas de una máquina.
 
-**Prerrequisitos:** JDK 17 o superior y Maven disponibles en `PATH`; Git para obtener el repositorio. La primera ejecución de Maven puede requerir conexión a Internet para descargar dependencias. No se promete compatibilidad con todos los sistemas operativos existentes.
+**Prerrequisitos:** JDK 17 o superior, Maven y Git. El primer uso de Maven puede requerir acceso a Internet para resolver dependencias.
 
-## Procedimiento
+## Procedimiento reproducible
 
-1. Clonar el repositorio en una carpeta nueva, idealmente con espacios en el nombre de la ruta. No copiar `target/`, `.idea/` ni logs locales.
-2. Seleccionar el mismo commit o rama de la prueba en los dos entornos.
-3. Ejecutar el script correspondiente desde la raíz del repositorio.
-4. Conservar el directorio generado de evidencia y anotar los resultados en la matriz.
-5. Si falla alguna etapa, documentar y corregir el problema antes de repetir desde un clon limpio.
+1. Clonar la rama `test/T5.1.2-portability` en un directorio nuevo, con espacios en su ruta.
+2. Comprobar `git status`, la rama y el hash del commit antes de la ejecución.
+3. Desde la raíz del clon, ejecutar el script correspondiente.
+4. Guardar el directorio generado por el script y registrar la versión de Java, Maven, commit y resultado.
 
-### Windows — PowerShell
+**Windows / PowerShell:**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\portability\verify.ps1
 ```
 
-`-ExecutionPolicy Bypass` afecta sólo ese proceso, no cambia permanentemente la configuración del usuario. Si la sesión ya permite ejecutar scripts, también sirve:
-
-```powershell
-.\scripts\portability\verify.ps1
-```
-
-### Linux — Bash
+**Linux / Bash:**
 
 ```bash
-bash scripts/portability/verify.sh
+bash ./scripts/portability/verify.sh
 ```
 
-Al invocarlo mediante `bash` no es necesario utilizar `chmod +x`.
+Ambos scripts realizan las mismas comprobaciones:
 
-## Qué verifica cada script
+- Capturan versiones de Java, `javac`, Maven, información del sistema y commit.
+- Ejecutan compilación limpia y suite Maven (`mvn clean test`).
+- Construyen el JAR (`mvn -DskipTests package`).
+- Comprueban la ayuda de `app.Main` sin iniciar Workers.
+- Ejecutan `RANDOM` y `PRIORITY`, cada una con `--target=12 --scale=0.01`.
+- Comprueban 12 admisiones T0, 12 finalizaciones T9, 12 T-invariantes, P/T-invariantes válidos, Workers terminados y logs generados.
+- Escriben `status.txt` con `SUCCESS` sólo al finalizar toda la validación.
 
-- Captura versión de `java`, `javac`, `mvn` y hash del commit.
-- Ejecuta `mvn clean test` y `mvn -DskipTests package`.
-- Ejecuta `app.Main --help` sin crear Workers.
-- Ejecuta `RANDOM` y `PRIORITY` por separado, cada una con `--target=12 --scale=0.01` y timeout de 20 s.
-- Exige `T0=12`, `T9=12`, 12 T-invariantes, P/T-invariantes válidos, Workers terminados y corrida exitosa.
-- Comprueba que se creó un log no vacío para cada política.
+Estas corridas rápidas verifican **funcionalidad y portabilidad**, no la ventana experimental de 20–40 segundos con 200 T-invariantes. Esa ventana se estudió por separado en las campañas experimentales.
 
-Las corridas rápidas **no** validan la ventana de 20–40 segundos exigida para 200 invariantes. Para ese requisito se conserva la campaña de DEV4 en `docs/evidencia-T4.2.2.md`.
+## Matriz de resultados observados
 
-## Evidencias
+| Sistema / terminal | Java de ejecución / Maven | Commit probado | `clean test` | JAR | Ayuda | RANDOM 12 | PRIORITY 12 | Resultado |
+|---|---|---|---|---|---|---|---|---|
+| Windows / PowerShell | Java 17.0.20.1 / Maven 3.10.0 | `aaf18fc7a7bd2292cf057febc25a5cbf974ef48f` | **174/174** | OK | OK | OK | OK | **SUCCESS** |
+| Linux / Bash | Java 27 / Maven 3.10.0 | `c311dc2fb75df1a1e95428b2fe7cbc9a3ef64def` | **174/174** | OK | OK | OK | OK | **SUCCESS** |
 
-Cada script crea un directorio específico para el SO y la fecha de ejecución:
+Las dos ejecuciones se realizaron sobre la rama `test/T5.1.2-portability` y desde clones limpios. **Los hashes de commit son diferentes**, por lo que no se afirma que ambos entornos probaron exactamente la misma revisión; se registra cada revisión de forma explícita para mantener la trazabilidad.
+
+El compilador utilizó compatibilidad de código Java 17 (`--release 17`) en ambas plataformas. En Linux se ejecutó con **Java 27**, no con Java 17. La prueba comprueba compatibilidad con un runtime posterior al mínimo exigido, mientras que Java 17 como runtime se verificó en Windows.
+
+## Validación Windows — clon limpio
+
+**Fecha:** 15/10/2026.
+
+- **Entorno:** Windows 11, PowerShell, Eclipse Temurin Java 17.0.20.1 y Maven 3.10.0.
+- **Rama:** `test/T5.1.2-portability`.
+- **Commit:** `aaf18fc7a7bd2292cf057febc25a5cbf974ef48f`.
+- **Ubicación:** clon nuevo en un directorio con espacios.
+- **Compilación y tests:** `BUILD SUCCESS`; 174 tests, 0 fallas, 0 errores, 0 omitidos.
+- **Empaquetado y ayuda:** JAR generado correctamente; `app.Main --help` correcto.
+- **RANDOM:** IT1=4, IT2=2, IT3=6; T0=T9=12; 0,057 s.
+- **PRIORITY:** IT1=3, IT2=5, IT3=4; T0=T9=12; 0,069 s.
+- **Verificación:** P-invariantes y T-invariantes válidos, Workers terminados y ambas corridas exitosas.
+- **Evidencia local:** `results/portability/windows/20261015_115119/`.
+
+**Resultado: VALIDACIÓN EXITOSA.**
+
+### Validación preliminar adicional en Windows
+
+El 15/10/2026 también se ejecutó el script en el repositorio de desarrollo (no era un clon limpio): 174 tests verdes, empaquetado correcto y ambas políticas finalizadas correctamente. Su evidencia quedó en `results/portability/windows/20261015_113210/`.
+
+Además, se había verificado una corrida real `PRIORITY` con 200 transacciones, tiempos `BASELINE`, 200 admisiones, 200 finalizaciones, IT1=54, IT2=99, IT3=47 y duración de 36,526 s, con invariantes válidos y Workers terminados. Esta corrida no sustituye a las campañas ni a la prueba del clon limpio.
+
+## Validación Linux — clon limpio
+
+**Fecha:** 17/10/2026.
+
+- **Entorno:** Linux / Bash, OpenJDK 27, `javac 27` y Apache Maven 3.10.0.
+- **Rama:** `test/T5.1.2-portability`.
+- **Commit:** `c311dc2fb75df1a1e95428b2fe7cbc9a3ef64def`.
+- **Ubicación:** clon nuevo en un directorio con espacios; árbol de trabajo limpio antes de la prueba.
+- **Compilación y tests:** 34 archivos fuente productivos y 29 de tests compilados con `release 17`; `BUILD SUCCESS`; 174 tests, 0 fallas, 0 errores y 0 omitidos.
+- **Empaquetado y ayuda:** JAR generado correctamente y `app.Main --help` ejecutado.
+- **RANDOM:** IT1=5, IT2=3, IT3=4; T0=T9=12; 0,036 s.
+- **PRIORITY:** IT1=3, IT2=6, IT3=3; T0=T9=12; 0,036 s.
+- **Verificación:** P-invariantes y T-invariantes válidos, Workers terminados y ambas corridas exitosas.
+- **Evidencia local:** `results/portability/linux/20261017_192931/`.
+- **Estado registrado:** `status.txt = SUCCESS`.
+
+**Resultado: VALIDACIÓN EXITOSA.**
+
+Las distribuciones de IT pueden variar entre ejecuciones por la concurrencia. La misma seed no implica que todas las intercalaciones de Workers sean idénticas.
+
+## Manejo de evidencias y observaciones
+
+Los scripts generan directorios con fecha y hora:
 
 ```text
 results/portability/windows/AAAAMMDD_HHMMSS/
 results/portability/linux/AAAAMMDD_HHMMSS/
 ```
 
-Incluye versiones de las herramientas, commit, salida de los tests y del empaquetado, ayuda, resúmenes y logs de ambas políticas. Sólo aparece `status.txt` con `SUCCESS` al finalizar todas las comprobaciones. `results/portability/.gitignore` evita versionar por accidente esos archivos generados; guardar un ZIP de evidencia si se necesita adjuntar a la entrega.
+Allí se guardan versiones, commit, logs de Maven, resultados de ambas políticas y `status.txt`. Estos archivos no necesitan incorporarse al código fuente; la carpeta `results/portability/.gitignore` evita su inclusión accidental. Si se solicita evidencia material en la entrega, puede conservarse un ZIP externo.
 
-## Matriz de portabilidad — completar con pruebas reales
-
-| SO / terminal | Java / Maven | Commit | `clean test` | `package` | `--help` | RANDOM 12 | PRIORITY 12 | Carpeta de evidencia | Estado |
-|---|---|---|---|---|---|---|---|---|---|
-| Windows / PowerShell | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | `results/portability/windows/...` | PENDIENTE |
-| Linux / Bash | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | Pendiente | `results/portability/linux/...` | PENDIENTE |
-
-## Validación preliminar — Windows (repositorio de trabajo)
-
-**Fecha:** 15/10/2026. Esta ejecución **no se realizó desde un clon limpio** y, por lo tanto, todavía no satisface ese criterio de cierre.
-
-| Campo | Resultado observado |
-|---|---|
-| SO y terminal | Windows 11 / PowerShell |
-| Java y compilador | Eclipse Temurin OpenJDK 17.0.20.1 / `javac 17.0.20.1` |
-| Maven | Apache Maven 3.10.0 |
-| Commit registrado | `184ca21b6fa6837f9ac989cad0694390588f71bf` |
-| `mvn clean test` | **SUCCESS**: 174 tests, 0 failures, 0 errors, 0 skipped |
-| `mvn -DskipTests package` | **SUCCESS**: JAR construido |
-| `app.Main --help` | **SUCCESS**: mostró la ayuda |
-| RANDOM (`--target=12 --scale=0.01`) | **SUCCESS**: IT1=5, IT2=1, IT3=6; 12 admisiones y 12 finalizaciones; 0,052 s |
-| PRIORITY (`--target=12 --scale=0.01`) | **SUCCESS**: IT1=3, IT2=6, IT3=3; 12 admisiones y 12 finalizaciones; 0,068 s |
-| Invariantes y finalización | Ambas corridas: P/T-invariantes válidos, Workers terminados |
-| Evidencia local | `results/portability/windows/20261015_113210/` |
-
-El warning de conexión a `apache.snapshots` no impidió compilar, probar ni empaquetar. Los registros generados quedan en la carpeta local de evidencia; no es necesario versionarlos.
-
-**Evidencia funcional adicional:** previamente se ejecutó `PRIORITY` con 200 transacciones y tiempos `BASELINE`: 200 admisiones, 200 finalizaciones, IT1=54, IT2=99, IT3=47, duración 36,526 s, P/T-invariantes válidos y Workers terminados.
-
-**Pendiente:** realizar las pruebas desde clones limpios en Windows y Linux. Actualizar las filas de la matriz anterior sólo después de completar cada una.
-
-### Validación desde clon limpio — Windows
-
-**Fecha:** 15/10/2026
-
-**Entorno:**
-- Windows 11 (amd64).
-- Eclipse Temurin JDK 17.0.20.1.
-- Apache Maven 3.10.0.
-- PowerShell.
-- Commit: `aaf18fc7a7bd2292cf057febc25a5cbf974ef48f`.
-- Clon independiente en una carpeta con espacios.
-
-**Pruebas realizadas:**
-- Compilación limpia: exitosa.
-- Suite Maven: 174 tests, 0 fallas, 0 errores.
-- Empaquetado JAR: exitoso.
-- `Main --help`: exitoso.
-- RANDOM: 12 admisiones, 12 finalizaciones.
-- PRIORITY: 12 admisiones, 12 finalizaciones.
-- P-invariantes y T-invariantes: válidos.
-- Workers terminados: sí.
-
-**Resultado:** VALIDACIÓN EXITOSA.
-
-**Evidencia local:**
-`results/portability/windows/20261015_115119/`
-
-La ejecución utilizó `--target=12` y `--scale=0.01`
-como prueba funcional rápida, no como campaña
-experimental de rendimiento.
+En las pruebas apareció un warning de conexión al repositorio `apache.snapshots`; **no fue un fallo de compilación** ni impidió ejecutar los tests o construir el JAR.
 
 ## Criterios de cierre
 
-- [ ] La prueba de Windows pasa desde un clon limpio.
-- [ ] La prueba de Linux pasa desde un clon limpio.
-- [ ] La matriz registra Java, Maven, commit y ubicación de las evidencias reales.
-- [ ] Se registran y solucionan defectos de separadores, codificación, permisos o rutas detectados.
-- [ ] La documentación y scripts están revisados y mergeados a `develop`.
+- [x] Windows: compilación, tests y ejecución de ambas políticas desde un clon limpio.
+- [x] Linux: compilación, tests y ejecución de ambas políticas desde un clon limpio.
+- [x] Registrar Java, Maven, commit y rutas de evidencia reales en ambos entornos.
+- [x] Verificar rutas con espacios, creación de logs y terminación de Workers.
+- [x] No se observaron defectos de portabilidad que impidieran completar las validaciones.
+- [ ] Revisar, aprobar y mergear la documentación y scripts a `develop`.
 
-**No cerrar T5.1.2 hasta completar ambas validaciones.**
+**Conclusión:** Las validaciones técnicas de T5.1.2 están completas. Sólo resta integrar esta documentación mediante PR y cerrar el issue correspondiente.
