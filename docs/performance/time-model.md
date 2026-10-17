@@ -8,9 +8,11 @@ analítica de la duración de una corrida.
 
 Este documento corresponde a la tarea T3.2.1.
 
-La validación experimental y el ajuste definitivo se realizarán
-posteriormente, una vez definida la regla exacta de finalización
-de 200 T-invariantes.
+El modelo se elaboró originalmente antes de la campaña experimental.
+La regla de cierre de 200 T-invariantes y la comparación experimental
+posterior ya se encuentran implementadas y documentadas en
+[`../protocolo-experimentos.md`](../protocolo-experimentos.md) y
+[`../analisis-T4.2.3.md`](../analisis-T4.2.3.md).
 
 ---
 
@@ -119,7 +121,9 @@ ejecución. No incluye:
 - cambios de sensibilización;
 - distribución real producida por cada política.
 
-Estos efectos deberán medirse experimentalmente.
+Estos efectos fueron considerados en las mediciones de la campaña formal;
+la expresión anterior continúa siendo una estimación analítica y no una
+predicción exacta de cada corrida.
 
 ---
 
@@ -188,27 +192,55 @@ La configuración inicial:
 produce cargas analíticas compatibles con la ventana objetivo
 de 20 a 40 segundos para 200 invariantes.
 
-No se considera todavía una configuración definitiva.
+Esta fue la configuración **BASELINE** utilizada como referencia de la
+campaña formal. La segunda configuración experimental se denominó
+**VARIANT** y aplica el factor `1.05` a los delays base.
 
-La selección final deberá realizarse mediante múltiples ejecuciones,
-comparando el modelo analítico con los tiempos observados.
+Ambas configuraciones fueron evaluadas en múltiples corridas por política.
+Los resultados observados se encuentran en
+[`../evidencia-T4.2.2.md`](../evidencia-T4.2.2.md).
 
 ---
 
-## Validación experimental pendiente
+## Contraste con la campaña experimental finalizada
 
-Cuando se encuentre definida la regla exacta de 200 T-invariantes,
-se deberán comparar al menos dos configuraciones temporales.
+La campaña formal ejecutó 20 corridas en total:
 
-Para cada configuración se registrará:
+- políticas: `RANDOM` y `PRIORITY`;
+- configuraciones: `BASELINE` y `VARIANT` (`1.05` de escala);
+- cinco seeds por combinación;
+- 200 T-invariantes completos por corrida.
 
-- política utilizada;
-- seed;
-- tiempos de T2, T3, T5, T7 y T8;
-- cantidad de invariantes de cada tipo;
-- tiempo total medido con reloj monotónico;
-- diferencia entre tiempo analítico y observado;
-- cumplimiento de la ventana de 20 a 40 segundos.
+El análisis de resultados documenta los siguientes **tiempos promedio**:
 
-La campaña experimental corresponde a una etapa posterior y no forma
-parte de T3.2.1.
+| Política | Timing | Duración promedio observada |
+|---|---|---:|
+| RANDOM | BASELINE | 32,142 s |
+| RANDOM | VARIANT | 33,519 s |
+| PRIORITY | BASELINE | 36,184 s |
+| PRIORITY | VARIANT | 38,032 s |
+
+Son promedios empíricos de cinco corridas por escenario, tomados del
+[`../analisis-T4.2.3.md`](../analisis-T4.2.3.md), **no** predicciones
+individuales de la cota `max(P7, P8)`.
+
+La prioridad del flujo de alto riesgo incrementó la participación de IT2 y,
+con ello, la carga compartida sobre P7 y P8. Por su parte, el aumento de un
+5 % en las demoras elevó el tiempo observado en ambas políticas.
+
+El análisis detallado —incluidas dispersión, distribuciones e interpretación
+del modelo analítico— pertenece a los documentos experimentales:
+
+- [`../protocolo-experimentos.md`](../protocolo-experimentos.md)
+- [`../evidencia-T4.2.2.md`](../evidencia-T4.2.2.md)
+- [`../analisis-T4.2.3.md`](../analisis-T4.2.3.md)
+
+## Alcance de esta estimación
+
+Los tiempos de cada camino suman los delays configurados, pero una corrida
+concurrente también está limitada por la contención de recursos, el
+interleaving y el costo de monitorización y registro. Por eso no corresponde
+igualar la suma de tiempos por flujo con la duración real de la corrida.
+
+Se conserva este documento como **modelo analítico de T3.2.1**, actualizado
+con referencias al contraste experimental ya realizado en T3.2.3 / T4.2.2.
