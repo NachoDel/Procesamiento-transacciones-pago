@@ -5,7 +5,7 @@
 
 ## Decisión
 
-El proyecto utilizará **Java 17 (LTS)** como versión base del lenguaje y **Apache Maven 3.9.x** como herramienta de construcción y gestión de dependencias.
+El proyecto utiliza **Java 17 (LTS)** como versión base del lenguaje y **Apache Maven 3.9 o superior** como herramienta de construcción y gestión de dependencias.
 
 > Esta versión de Java no es una exigencia del enunciado. El TP únicamente exige implementar la solución en Java y que el proyecto pueda ejecutarse independientemente del sistema operativo y del IDE. La elección de Java 17 + Maven es una decisión técnica del equipo.
 
@@ -25,9 +25,7 @@ El objetivo del proyecto es implementar y explicar explícitamente conceptos com
 
 ### ¿Por qué no usar directamente la versión más reciente?
 
-A septiembre de 2026, **Java 26 es la versión general más reciente** y **Java 25 es la LTS más reciente**. Java 17, Java 21 y Java 25 son versiones LTS.
-
-Elegimos Java 17 como baseline conservador porque:
+Se eligió Java 17 como baseline conservador, sin depender de que sea el JDK más reciente, porque:
 
 1. **No necesitamos APIs nuevas para cumplir el TP.** El núcleo requerido se implementa completamente con APIs disponibles en Java 17.
 2. **Reduce diferencias entre las máquinas del equipo.** Es más probable encontrar soporte ya instalado o fácilmente disponible en distintos entornos académicos y de desarrollo.
@@ -60,18 +58,16 @@ mvn clean test
 
 permite compilar el proyecto y ejecutar los tests sin depender del IDE.
 
-## Maven Wrapper
+## Construcción reproducible sin Maven Wrapper
 
-Para mejorar todavía más la portabilidad, el repositorio debería incluir **Maven Wrapper** (`mvnw`, `mvnw.cmd` y `.mvn/wrapper`). De esta forma los integrantes no necesitan instalar manualmente la misma versión de Maven.
-
-Los comandos pasarían a ser:
+El repositorio **no incluye Maven Wrapper** (`mvnw`, `mvnw.cmd` ni `.mvn/wrapper`). Se requiere instalar Maven de forma independiente, junto con un JDK compatible. La compilación y las pruebas se ejecutan mediante:
 
 ```bash
-./mvnw clean test       # Linux / macOS
-mvnw.cmd clean test     # Windows
+mvn clean test
+mvn -DskipTests package
 ```
 
-Así, la única dependencia externa relevante para desarrollar y ejecutar el proyecto es disponer de un JDK compatible.
+Esta decisión se validó en clones limpios con Maven 3.10.0, usando Java 17 en Windows y Java 27 en Linux, con compilación configurada para Java 17 (`--release 17`). Los detalles y resultados están documentados en [`../portabilidad.md`](../portabilidad.md).
 
 ## Resumen
 

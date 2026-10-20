@@ -2,9 +2,9 @@
 
 ## Alcance y fuente
 
-Diagramas preparados a partir de `src/main/java` del repositorio compartido, rama `docs/T5.1.3-diagramas-uml`, commit `184ca21b6fa6837f9ac989cad0694390588f71bf`.
+Diagramas elaborados a partir de `src/main/java`. Su elaboración se inició en la rama `docs/T5.1.3-diagramas-uml`; los archivos están integrados en `develop`.
 
-Los archivos **`.puml` son las fuentes editables** de la documentación UML. Las imágenes `.svg`/`.png` entregadas junto a ellos son vistas previas esquemáticas para consulta; si modificás el `.puml`, regenerá las imágenes definitivas con PlantUML para que queden idénticas a la fuente.
+Los archivos **`.puml` son las fuentes editables** de la documentación UML. Los `.svg` y `.png` son exportaciones de referencia para lectura e inclusión en el informe. Si se cambia el código o un `.puml`, deben revisarse las relaciones y regenerarse las imágenes para mantenerlas coherentes.
 
 ## Diagramas
 
@@ -53,10 +53,12 @@ Los diagramas son **vistas de arquitectura**, no un volcado automático de todos
 
 El diagrama de secuencia describe **una ejecución representativa**, no un orden determinista de los disparos de los cinco threads. Los eventos de Workers pueden intercalarse de distintas formas, preservando las restricciones del Monitor.
 
-## Verificación antes de mergear
+## Verificación de mantenimiento
+
+Si se realizan cambios futuros en los diagramas:
 
 - Comparar clases, nombres de métodos y dependencias con `src/main/java`.
-- Abrir los `.puml` en la extensión PlantUML del editor o renderizarlos con la CLI.
-- Comprobar que las etiquetas y flechas se lean sin recortes al exportar SVG.
-- Ejecutar `git diff --check`.
-- El cambio debe limitarse a documentación y recursos gráficos.
+- Renderizar los `.puml` con PlantUML.
+- Revisar que las etiquetas y flechas se lean sin recortes.
+- Regenerar SVG/PNG y comprobar que coincidan con las fuentes.
+- Ejecutar `git diff --check` antes de versionar los cambios.

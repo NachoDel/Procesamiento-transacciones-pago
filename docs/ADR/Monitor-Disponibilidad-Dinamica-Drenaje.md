@@ -8,6 +8,8 @@
 
 El sistema de procesamiento de pagos utiliza una Red de Petri con un `Monitor` que serializa los disparos mediante `ReentrantLock`, coordina esperas con `Condition` y aplica prioridad de transiciones inmediatas sobre transiciones temporales.
 
+Se eligió `ReentrantLock` en lugar de depender exclusivamente de un método `synchronized` porque las colas de espera por transición y la condición temporal requieren señalización y suspensión explícitas mediante `Condition`. Las esperas liberan el lock y permiten que otros Workers progresen; el Monitor lo recupera antes de volver a comprobar la condición.
+
 La ejecución del modelo cuenta con cinco Workers oficiales:
 
 | Worker | Secuencia de transiciones | Responsabilidad |
