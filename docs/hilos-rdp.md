@@ -320,7 +320,7 @@ El máximo de operaciones temporales de procesamiento simultáneas observado en 
 
 ## 11. Relación con la implementación
 
-Esta asignación debe utilizarse como referencia para la implementación de los workers.
+Esta asignación se utiliza en la implementación de los Workers.
 
 Los workers no deben decidir qué transición gana un conflicto. Esa responsabilidad corresponde al monitor y a la política de resolución de conflictos.
 
@@ -342,11 +342,11 @@ Esta separación permite que cada worker represente una secuencia coherente de l
 
 ---
 
-## 12. Entregables a otros desarrolladores
+## 12. Contratos implementados
 
-### DEV 3
+### Workers y secuencias
 
-Se entrega la tabla final de workers y sus secuencias:
+La configuración productiva utiliza la siguiente tabla:
 
 ```text
 H0 = {T0}
@@ -356,11 +356,11 @@ H3 = {T6, T7, T8}
 H4 = {T9}
 ```
 
-DEV 3 deberá utilizar esta definición como referencia para implementar los workers reales.
+Cada Worker solicita sus transiciones al `MonitorInterface` sin consultar el marcado directamente.
 
-### DEV 4
+### T-invariantes registrados por la ejecución
 
-Se entregan los T-invariantes que deberán contabilizarse durante las ejecuciones:
+La verificación final contabiliza:
 
 ```text
 IT1 = {T0, T1, T2, T3, T9}
@@ -368,11 +368,19 @@ IT2 = {T0, T4, T5, T9}
 IT3 = {T0, T6, T7, T8, T9}
 ```
 
-Estos invariantes representan los tres tipos de ciclo completo que deberán detectarse posteriormente en el log.
+Estos invariantes representan los tres tipos de ciclo completo que se detectan en el log al finalizar cada corrida.
 
 ---
 
-## 13. Conclusión
+## 13. Parada y drenaje de Workers
+
+`Worker` consulta su condición de parada **entre ciclos completos**, no entre las transiciones de una secuencia. Así, al recibir una solicitud de parada normal, H1 intenta terminar `T1 → T2 → T3` antes de iniciar otro ciclo; análogamente ocurre con H2 y H3. Una interrupción, en cambio, puede abortar una espera y finalizar el Worker antes de completar la secuencia.
+
+Al llegar a `TARGET` admisiones, se detiene específicamente H0 y se deshabilita T0 a nivel de disponibilidad del Monitor. H1–H4 continúan hasta que T9 alcanza `TARGET`; después el runner solicita la parada global, interrumpe si es necesario y espera el fin de todos los Threads. Ver [`runner-experimental.md`](runner-experimental.md) y [`ADR/Monitor-Disponibilidad-Dinamica-Drenaje.md`](ADR/Monitor-Disponibilidad-Dinamica-Drenaje.md).
+
+---
+
+## 14. Conclusión
 
 Aplicando las reglas del enunciado a los conflictos y joins de la Red de Petri se obtiene una cantidad estructural de cinco hilos.
 

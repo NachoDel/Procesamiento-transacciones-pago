@@ -28,7 +28,7 @@ De acuerdo con el modelo, las transiciones temporales son:
 | T7 | 100 ms |
 | T8 | 120 ms |
 
-Las restantes transiciones se consideran inmediatas.
+Las restantes transiciones se consideran inmediatas. En particular, `T9` debe poder ejecutarse con prioridad sobre transiciones temporales cuando un procesamiento finaliza y deposita un token en `P9`; así se evita que se acumulen finalizaciones por delante de una inmediata disponible. Esta regla se aplica solo sobre transiciones habilitadas y disponibles durante la fase de ejecución, de acuerdo con [`../ADR/Monitor-Disponibilidad-Dinamica-Drenaje.md`](../ADR/Monitor-Disponibilidad-Dinamica-Drenaje.md).
 
 ---
 

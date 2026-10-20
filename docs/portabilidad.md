@@ -8,7 +8,7 @@ Verificar que el proyecto puede compilarse, probarse y ejecutarse desde **clones
 
 ## Procedimiento reproducible
 
-1. Clonar la rama `test/T5.1.2-portability` en un directorio nuevo, con espacios en su ruta.
+1. Clonar la versión integrada (`develop`) en un directorio nuevo, preferiblemente con espacios en su ruta. Las validaciones históricas registradas abajo se hicieron sobre `test/T5.1.2-portability`.
 2. Comprobar `git status`, la rama y el hash del commit antes de la ejecución.
 3. Desde la raíz del clon, ejecutar el script correspondiente.
 4. Guardar el directorio generado por el script y registrar la versión de Java, Maven, commit y resultado.
@@ -111,6 +111,6 @@ En las pruebas apareció un warning de conexión al repositorio `apache.snapshot
 - [x] Registrar Java, Maven, commit y rutas de evidencia reales en ambos entornos.
 - [x] Verificar rutas con espacios, creación de logs y terminación de Workers.
 - [x] No se observaron defectos de portabilidad que impidieran completar las validaciones.
-- [ ] Revisar, aprobar y mergear la documentación y scripts a `develop`.
+- [x] Documentación y scripts integrados a `develop` mediante PR.
 
-**Conclusión:** Las validaciones técnicas de T5.1.2 están completas. Sólo resta integrar esta documentación mediante PR y cerrar el issue correspondiente.
+**Conclusión:** T5.1.2 está completada. El proyecto se compiló, probó y ejecutó desde clones limpios en Windows y Linux. Los reportes reproducibles se generan localmente y no se agregan al código fuente.

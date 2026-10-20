@@ -254,25 +254,19 @@ Los tiempos promedio obtenidos fueron:
 
 La configuración VARIANT incrementa la duración respecto de BASELINE sin superar el límite de 40 segundos.
 
-La interpretación detallada del efecto temporal se realizará en T4.2.3.
+La interpretación detallada del efecto temporal está desarrollada en [`analisis-T4.2.3.md`](analisis-T4.2.3.md).
 
 ---
 
 ## 9. Evidencia generada
 
-Los logs de la campaña formal definitiva se encuentran en:
+Durante la campaña formal definitiva los logs se generaron en:
 
 ```text
 results/logs/
 ```
 
-La campaña contiene:
-
-```text
-20 logs
-```
-
-con la convención:
+La ejecución generó un log por cada una de las 20 corridas, con la convención:
 
 ```text
 <POLICY>_<TIMING>_<SEED>.log
@@ -289,6 +283,8 @@ La salida de consola de la campaña se conserva en:
 ```text
 results/summary/formal-campaign-console.txt
 ```
+
+**Alcance de los archivos versionados:** el repositorio conserva el CSV consolidado y la salida de consola, pero **no contiene los 20 logs individuales originales**: los logs `*.log` se excluyen mediante `.gitignore`. Para verificar los disparos individualmente deben recuperarse esos logs auténticos por separado o repetirse la campaña. No se deben sustituir por trazas de otras corridas.
 
 ---
 
@@ -338,17 +334,7 @@ de manera sistemática.
 
 Esa evidencia permitió detectar el problema de arbitraje y desarrollar las pruebas de regresión correspondientes.
 
-La campaña anterior fue archivada en:
-
-```text
-results/diagnostic-pre-fix/
-```
-
-y se conserva únicamente como:
-
-```text
-evidencia diagnóstica pre-corrección
-```
+La campaña diagnóstica previa se conserva en el **historial de Git** como evidencia de la corrección; su CSV no se incluye en el paquete de código fuente final. Su interpretación está documentada en [`ADR/Policy-Fairness.md`](ADR/Policy-Fairness.md).
 
 No debe utilizarse como fuente de resultados para el análisis final.
 
@@ -391,8 +377,8 @@ Se obtuvieron:
 ```text
 20 corridas
 4000 T-invariantes completos en total
-20 logs formales
-1 CSV consolidado
+20 logs generados durante la campaña (no versionados)
+1 CSV consolidado versionado
 ```
 
 Todas las ejecuciones cumplieron:
